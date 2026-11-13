@@ -1,0 +1,37 @@
+# Local development services. Start with:  docker compose up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: clipgen-postgres
+    environment:
+      POSTGRES_USER: clipgen
+      POSTGRES_PASSWORD: clipgen
+      POSTGRES_DB: clipgen
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipgen -d clipgen"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: clipgen-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
