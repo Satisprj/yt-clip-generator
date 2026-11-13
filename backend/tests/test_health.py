@@ -1,5 +1,7 @@
 from app.services import system_checks
 
+ALL_CHECKS = ("check_database", "check_redis", "check_ffmpeg", "check_claude_cli")
+
 
 def _ok() -> None:
     return None
@@ -18,19 +20,19 @@ def test_liveness(client):
 
 
 def test_readiness_all_ok(client, monkeypatch):
-    for name in ("check_database", "check_redis", "check_ffmpeg"):
+    for name in ALL_CHECKS:
         monkeypatch.setattr(system_checks, name, _ok)
     response = client.get("/api/health/ready")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert set(body["checks"]) == {"database", "redis", "ffmpeg"}
+    assert set(body["checks"]) == {"database", "redis", "ffmpeg", "claude_cli"}
 
 
 def test_readiness_reports_failed_dependency(client, monkeypatch):
-    monkeypatch.setattr(system_checks, "check_database", _ok)
+    for name in ALL_CHECKS:
+        monkeypatch.setattr(system_checks, name, _ok)
     monkeypatch.setattr(system_checks, "check_redis", _fail)
-    monkeypatch.setattr(system_checks, "check_ffmpeg", _ok)
     response = client.get("/api/health/ready")
     assert response.status_code == 503
     body = response.json()

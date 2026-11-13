@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.db.session import get_engine
+from app.services.llm import check_cli_version
 
 
 def check_database() -> None:
@@ -25,6 +26,10 @@ def check_redis() -> None:
         client.ping()
     finally:
         client.close()
+
+
+def check_claude_cli() -> None:
+    check_cli_version(get_settings().claude_cli_path)
 
 
 def check_ffmpeg() -> None:

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
 
-    # --- Claude API ---
-    anthropic_api_key: SecretStr | None = None
+    # --- Claude (via the Claude Code CLI, using the logged-in subscription) ---
+    claude_cli_path: str = "claude"
+    claude_cli_timeout_seconds: int = Field(default=600, gt=0)
     claude_model: str = "claude-opus-5-5"
     claude_fast_model: str = "claude-haiku-5-5"
 
@@ -59,7 +60,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("anthropic_api_key", "ytdlp_cookies_file", mode="before")
+    @field_validator("ytdlp_cookies_file", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

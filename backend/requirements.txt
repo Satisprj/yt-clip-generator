@@ -23,8 +23,8 @@ opencv-python-headless>=5.0,<6
 numpy>=2.5,<3
 
 # --- AI ---
+# Claude is called through the Claude Code CLI (`claude -p`), so no Anthropic SDK is needed.
 faster-whisper>=1.2,<2
-anthropic>=2.8,<3
 
 # --- Subtitles ---
 pysubs2>=1.9,<2

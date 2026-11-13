@@ -23,6 +23,9 @@ and psycopg, so the backend runs inside WSL2 (Ubuntu), where everything works na
    ```
    This installs Python, FFmpeg, Redis, PostgreSQL and Node.js, creates the database and
    virtualenv, installs all packages and runs the tests.
+4. Claude is called through the Claude Code CLI with your subscription (no API key).
+   In `backend/.env` set `CLAUDE_CLI_PATH=/mnt/c/Users/<you>/.local/bin/claude.exe`
+   to use the Windows install, or install Claude Code inside Ubuntu and log in.
 
 The manual steps below are for Linux/macOS or a Windows machine without Smart App Control.
 
@@ -42,7 +45,7 @@ cd backend
 py -3.12 -m venv .venv
 .venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-dev.txt
-copy .env.example .env            # then set ANTHROPIC_API_KEY
+copy .env.example .env            # Claude Code must be installed and logged in
 
 uvicorn app.main:app --reload     # http://localhost:8000/api/docs
 celery -A app.worker.celery_app worker --loglevel=INFO --pool=solo   # second terminal

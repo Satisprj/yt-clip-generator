@@ -48,6 +48,7 @@ def readiness(response: Response) -> ReadinessResponse:
         "database": _run_check("database", system_checks.check_database),
         "redis": _run_check("redis", system_checks.check_redis),
         "ffmpeg": _run_check("ffmpeg", system_checks.check_ffmpeg),
+        "claude_cli": _run_check("claude_cli", system_checks.check_claude_cli),
     }
     healthy = all(c.status == "ok" for c in checks.values())
     if not healthy:

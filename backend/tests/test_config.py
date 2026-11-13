@@ -14,16 +14,17 @@ def test_relative_storage_dir_resolves_from_backend_dir(monkeypatch):
     assert Settings().storage_dir == (BACKEND_DIR / "my_storage").resolve()
 
 
-def test_empty_api_key_is_treated_as_missing(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "  ")
-    assert Settings().anthropic_api_key is None
+def test_empty_cookies_file_is_treated_as_missing(monkeypatch):
+    monkeypatch.setenv("YTDLP_COOKIES_FILE", "  ")
+    assert Settings().ytdlp_cookies_file is None
 
 
-def test_api_key_is_not_leaked_in_repr(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-value")
+def test_claude_cli_settings(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CLI_PATH", "/opt/claude")
+    monkeypatch.setenv("CLAUDE_CLI_TIMEOUT_SECONDS", "120")
     settings = Settings()
-    assert "sk-secret-value" not in repr(settings)
-    assert settings.anthropic_api_key.get_secret_value() == "sk-secret-value"
+    assert settings.claude_cli_path == "/opt/claude"
+    assert settings.claude_cli_timeout_seconds == 120
 
 
 def test_clip_min_greater_than_max_is_rejected(monkeypatch):

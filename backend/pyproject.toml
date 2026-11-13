@@ -8,6 +8,7 @@ requires-python = ">=3.11,<3.14"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+markers = ["integration: calls real external tools (opt-in via environment variables)"]
 
 [tool.ruff]
 line-length = 100

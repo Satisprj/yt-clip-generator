@@ -49,7 +49,7 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install -r "$PROJECT_DIR/backend/requirements-dev.txt"
 
 if [ ! -f "$PROJECT_DIR/backend/.env" ]; then
-  step "Creating backend/.env from .env.example (add your ANTHROPIC_API_KEY)"
+  step "Creating backend/.env from .env.example (set CLAUDE_CLI_PATH if needed)"
   cp "$PROJECT_DIR/backend/.env.example" "$PROJECT_DIR/backend/.env"
 fi
 

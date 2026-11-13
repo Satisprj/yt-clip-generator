@@ -4,6 +4,7 @@ Run:  uvicorn app.main:app --reload
 """
 
 import logging
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -30,8 +31,11 @@ def create_app() -> FastAPI:
             "%s v%s started (env=%s, storage=%s)",
             settings.app_name, __version__, settings.app_env, settings.storage_dir,
         )
-        if settings.anthropic_api_key is None:
-            logger.warning("ANTHROPIC_API_KEY is not set; highlight detection will fail.")
+        if shutil.which(settings.claude_cli_path) is None:
+            logger.warning(
+                "Claude CLI '%s' not found; highlight detection will fail.",
+                settings.claude_cli_path,
+            )
         yield
 
     app = FastAPI(

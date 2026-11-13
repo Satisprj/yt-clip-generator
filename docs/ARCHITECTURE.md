@@ -61,7 +61,7 @@ queued → fetching_info → downloading → extracting_audio → transcribing
 | downloading | yt-dlp | `source.mp4` (≤1080p) |
 | extracting_audio | FFmpeg | `audio.wav` (16 kHz mono) |
 | transcribing | faster-whisper (`word_timestamps=True`) + VAD | `transcript.json` (words + sentences) |
-| analyzing | Claude (`claude-opus-5-5`) | ranked candidates as **sentence-ID ranges** |
+| analyzing | Claude via `claude -p` (`claude-opus-5-5`) | ranked candidates as **sentence-ID ranges** |
 | rendering | FFmpeg + OpenCV | `clips/<n>.mp4`, `.ass`, `.srt`, thumbnail |
 
 Key decisions:
@@ -167,8 +167,8 @@ worker can reuse them and they can be tested on their own.
 
 | Service | Used for | Cost |
 |---------|----------|------|
-| Claude API, `claude-opus-5-5` | Highlight detection and ranking | $4 / M input tokens, $20 / M output tokens. One hour of video ≈ 30k tokens in → about **$0.15–0.30 per video hour** |
-| Claude API, `claude-haiku-5-5` | Titles, descriptions, hashtags | $0.10 / $0.50 per M tokens: under $0.01 per video |
+| Claude Code CLI (`claude -p`), `claude-opus-5-5` | Highlight detection and ranking | No API key or per-token bill: uses your Claude subscription and counts toward its usage limits. About 30k input tokens per hour of video |
+| Claude Code CLI, `claude-haiku-5-5` | Titles, descriptions, hashtags | Subscription usage (very small) |
 | faster-whisper | Transcription | Free (local CPU/GPU) |
 | yt-dlp | Metadata + download | Free (open source; see limitations) |
 | FFmpeg, OpenCV | Video processing | Free |
@@ -196,3 +196,18 @@ worker can reuse them and they can be tested on their own.
 - Celery's default worker pool does not support Windows; run the worker with `--pool=solo`.
 - Face-based reframing works well for talking heads, less well for screen shares or wide
   shots (falls back to a center crop).
+
+## 10. Claude access (CLI instead of API key)
+
+All LLM calls go through `app/services/llm.py`, which runs the Claude Code CLI headless:
+`claude -p --output-format json --json-schema <schema> --tools "" --setting-sources ""
+--strict-mcp-config --no-session-persistence`. The prompt is sent on stdin, the CLI
+validates the reply against the JSON schema, and the result is read from
+`structured_output`. `ANTHROPIC_API_KEY` is removed from the child environment so the
+subscription login is always used.
+
+- Subscription login is for personal use. Offering the app to other people requires an
+  API key (the client is behind one interface, so an API provider can be added later).
+- Each call takes a few seconds to start; the pipeline makes only a handful of calls per video.
+- Calls count toward the subscription's usage limits; a limit error fails the job with a
+  clear message, and the job can be retried later.
