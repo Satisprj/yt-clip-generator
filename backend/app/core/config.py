@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     ytdlp_cookies_file: Path | None = None
+    # JavaScript runtime yt-dlp uses for YouTube challenges (Node.js); empty to disable.
+    js_runtime_path: str | None = "node"
 
     # --- Storage and limits ---
     storage_dir: Path = Path("storage")
@@ -60,7 +62,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("ytdlp_cookies_file", mode="before")
+    @field_validator("ytdlp_cookies_file", "js_runtime_path", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

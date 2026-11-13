@@ -32,14 +32,15 @@ Windows Smart App Control blocks some native DLLs. The project avoids them:
 ## Setup
 
 ```powershell
-# 1. Database user and database (run once; asks for the postgres superuser password)
-& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "CREATE ROLE clipgen LOGIN PASSWORD 'clipgen';" -c "CREATE DATABASE clipgen OWNER clipgen;"
+# 1. Database user, app database and test database (run once; asks for the postgres password)
+& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "CREATE ROLE clipgen LOGIN PASSWORD 'clipgen';" -c "CREATE DATABASE clipgen OWNER clipgen;" -c "CREATE DATABASE clipgen_test OWNER clipgen;"
 
 # 2. Backend
 cd backend
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-dev.txt
-copy .env.example .env      # then set FFMPEG_PATH / FFPROBE_PATH if needed
+copy .env.example .env      # then set FFMPEG_PATH / FFPROBE_PATH / JS_RUNTIME_PATH if needed
+.venv\Scripts\python -m alembic upgrade head   # create tables (dev.ps1 also does this)
 
 # 3. Frontend
 cd ..\frontend
@@ -60,9 +61,10 @@ Open http://localhost:5173. The badge in the header shows whether every dependen
 
 ```powershell
 cd backend
-.venv\Scripts\python -m pytest              # unit tests
+.venv\Scripts\python -m pytest              # uses the clipgen_test database
 .venv\Scripts\python -m ruff check .
-$env:RUN_CLAUDE_CLI_TESTS = "1"; .venv\Scripts\python -m pytest -m integration   # real Claude call
+$env:RUN_CLAUDE_CLI_TESTS = "1"; $env:RUN_YOUTUBE_TESTS = "1"
+.venv\Scripts\python -m pytest -m integration   # real Claude CLI + YouTube calls
 cd ..\frontend; npm run build
 ```
 

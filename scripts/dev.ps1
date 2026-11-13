@@ -19,6 +19,15 @@ if (-not (Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue | Where-
     Write-Warning 'The PostgreSQL service is not running. Start it from services.msc.'
 }
 
+Write-Host 'Applying database migrations...' -ForegroundColor Cyan
+Push-Location $backend
+try {
+    & $python -m alembic upgrade head
+    if ($LASTEXITCODE -ne 0) { throw 'Database migration failed (is PostgreSQL running?).' }
+} finally {
+    Pop-Location
+}
+
 function Start-DevWindow([string]$title, [string]$dir, [string]$command) {
     $full = "`$Host.UI.RawUI.WindowTitle = '$title'; $command"
     Start-Process powershell -WorkingDirectory $dir -ArgumentList '-NoExit', '-Command', $full

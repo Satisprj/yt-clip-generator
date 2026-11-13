@@ -1,18 +1,34 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { createJob } from '../api/jobs.js'
 import { isValidYouTubeUrl } from '../utils/youtube.js'
 
 export default function HomePage() {
+  const navigate = useNavigate()
   const [url, setUrl] = useState('')
   const [touched, setTouched] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
 
   const valid = isValidYouTubeUrl(url)
-  const showError = touched && url.trim() !== '' && !valid
+  const showInvalid = touched && url.trim() !== '' && !valid
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     setTouched(true)
-    // Job submission (POST /api/jobs) is implemented in Phase 1.
+    if (!valid || submitting) return
+    setSubmitting(true)
+    setSubmitError(null)
+    try {
+      const job = await createJob(url.trim())
+      navigate(`/jobs/${job.id}`)
+    } catch (err) {
+      setSubmitError(err.message)
+      setSubmitting(false)
+    }
   }
+
+  const help = submitError ?? (showInvalid ? 'Enter a valid YouTube video URL.' : '')
 
   return (
     <section className="mx-auto max-w-2xl text-center">
@@ -30,29 +46,29 @@ export default function HomePage() {
           id="youtube-url"
           type="url"
           inputMode="url"
+          autoComplete="off"
           placeholder="https://www.youtube.com/watch?v=…"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={(e) => {
+            setUrl(e.target.value)
+            setSubmitError(null)
+          }}
           onBlur={() => setTouched(true)}
-          aria-invalid={showError}
+          aria-invalid={showInvalid || Boolean(submitError)}
           aria-describedby="url-help"
-          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-4 py-3 text-base outline-none placeholder:text-slate-500 focus:border-rose-400 focus:ring-2 focus:ring-rose-400/30"
+          disabled={submitting}
+          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-4 py-3 text-base outline-none placeholder:text-slate-500 focus:border-rose-400 focus:ring-2 focus:ring-rose-400/30 disabled:opacity-60"
         />
         <button
           type="submit"
-          disabled
-          title="Available in the next development phase"
+          disabled={!valid || submitting}
           className="rounded-lg bg-rose-500 px-6 py-3 font-semibold transition-colors hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Generate clips
+          {submitting ? 'Submitting…' : 'Generate clips'}
         </button>
       </form>
-      <p id="url-help" className={`mt-2 min-h-5 text-left text-sm ${showError ? 'text-rose-400' : 'text-slate-500'}`}>
-        {showError
-          ? 'Enter a valid YouTube video URL.'
-          : valid
-            ? 'Valid YouTube URL. Processing will be enabled in Phase 1.'
-            : ''}
+      <p id="url-help" role={help ? 'alert' : undefined} className="mt-2 min-h-5 text-left text-sm text-rose-400">
+        {help}
       </p>
     </section>
   )

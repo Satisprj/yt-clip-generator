@@ -1,7 +1,8 @@
 import { Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout.jsx'
-import HomePage from './pages/HomePage.jsx'
 import HistoryPage from './pages/HistoryPage.jsx'
+import HomePage from './pages/HomePage.jsx'
+import JobPage from './pages/JobPage.jsx'
 import NotFoundPage from './pages/NotFoundPage.jsx'
 
 export default function App() {
@@ -10,6 +11,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<HomePage />} />
         <Route path="history" element={<HistoryPage />} />
+        <Route path="jobs/:jobId" element={<JobPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

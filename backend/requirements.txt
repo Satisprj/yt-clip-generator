@@ -19,7 +19,7 @@ redis>=8.1,<9
 
 # --- YouTube + video processing ---
 # yt-dlp has no upper bound on purpose: YouTube changes often and old versions stop working.
-yt-dlp>=2026.10.26
+yt-dlp[default]>=2026.10.26
 opencv-python-headless>=5.0,<6
 numpy>=2.5,<3
 
