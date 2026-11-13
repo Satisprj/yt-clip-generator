@@ -1,6 +1,6 @@
 from app.services import system_checks
 
-ALL_CHECKS = ("check_database", "check_redis", "check_ffmpeg", "check_claude_cli")
+ALL_CHECKS = ("check_database", "check_queue", "check_ffmpeg", "check_claude_cli")
 
 
 def _ok() -> None:
@@ -26,19 +26,19 @@ def test_readiness_all_ok(client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert set(body["checks"]) == {"database", "redis", "ffmpeg", "claude_cli"}
+    assert set(body["checks"]) == {"database", "queue", "ffmpeg", "claude_cli"}
 
 
 def test_readiness_reports_failed_dependency(client, monkeypatch):
     for name in ALL_CHECKS:
         monkeypatch.setattr(system_checks, name, _ok)
-    monkeypatch.setattr(system_checks, "check_redis", _fail)
+    monkeypatch.setattr(system_checks, "check_queue", _fail)
     response = client.get("/api/health/ready")
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "degraded"
-    assert body["checks"]["redis"]["status"] == "error"
-    assert "connection refused" in body["checks"]["redis"]["error"]
+    assert body["checks"]["queue"]["status"] == "error"
+    assert "connection refused" in body["checks"]["queue"]["error"]
     assert body["checks"]["database"]["status"] == "ok"
 
 
@@ -48,5 +48,15 @@ def test_ffmpeg_check_reports_missing_binary(monkeypatch):
         system_checks.check_ffmpeg()
     except RuntimeError as exc:
         assert "definitely-not-a-real-ffmpeg-binary" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_queue_check_rejects_unknown_scheme(monkeypatch):
+    monkeypatch.setenv("CELERY_BROKER_URL", "amqp://guest@localhost//")
+    try:
+        system_checks.check_queue()
+    except RuntimeError as exc:
+        assert "amqp" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")

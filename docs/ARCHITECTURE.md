@@ -32,7 +32,7 @@ to the user with a clear message.
 └───────────┬────────────────────────────────────┬─────────────────────┘
             │ enqueue task                       │ SQLAlchemy
     ┌───────▼───────┐                     ┌──────▼──────┐
-    │ Redis (broker)│                     │ PostgreSQL  │  jobs, clips,
+    │ Celery broker │                     │ PostgreSQL  │  jobs, clips,
     └───────┬───────┘                     └──────▲──────┘  transcripts
             │                                    │
 ┌───────────▼──────────── Celery worker (backend/app/worker) ───────────┐
@@ -172,7 +172,7 @@ worker can reuse them and they can be tested on their own.
 | faster-whisper | Transcription | Free (local CPU/GPU) |
 | yt-dlp | Metadata + download | Free (open source; see limitations) |
 | FFmpeg, OpenCV | Video processing | Free |
-| PostgreSQL, Redis | Storage, queue | Free (self-hosted) |
+| PostgreSQL | Data storage and Celery job queue (Redis optional on Linux) | Free (self-hosted) |
 | YouTube Data API v3 | Not required | Free quota of 10,000 units/day if added later |
 
 ## 9. Limitations
@@ -194,6 +194,9 @@ worker can reuse them and they can be tested on their own.
 - CPU transcription is slow (about 0.3–1× real time with the `small` model). A CUDA GPU with 6 GB or more
   makes `large-v3` practical.
 - Celery's default worker pool does not support Windows; run the worker with `--pool=solo`.
+- Windows Smart App Control blocks some native DLLs (psycopg, Rollup's native module,
+  Memurai's installer). The project uses pg8000, Rollup's WebAssembly build and a PostgreSQL
+  Celery broker instead, so everything runs natively on Windows without WSL.
 - Face-based reframing works well for talking heads, less well for screen shares or wide
   shots (falls back to a center crop).
 

@@ -4,7 +4,7 @@ Each phase ends with passing tests and a manual check, then waits for approval.
 
 | Phase | Scope | Done when |
 |-------|-------|-----------|
-| **0. Foundation** ✅ | Folder structure, config, logging, error handling, DB session, Celery app, health endpoints, React + Tailwind shell, docker-compose | `pytest` passes; `/api/health/ready` reports DB, Redis and FFmpeg status; the frontend shows backend status |
+| **0. Foundation** ✅ | Folder structure, config, logging, error handling, DB session, Celery app (PostgreSQL broker on Windows), Claude CLI client, health endpoints, React + Tailwind shell | `pytest` passes; `/api/health/ready` reports database, queue, FFmpeg and Claude CLI as ok; the frontend shows backend status |
 | **1. Jobs and video info** | `jobs` model + Alembic migration, YouTube URL validation, yt-dlp metadata extraction, `POST/GET /api/jobs`, Celery task that fetches info, frontend submit form + job page + history list | Submitting a real URL creates a job that shows the real title, thumbnail and duration |
 | **2. Download and audio** | yt-dlp download (≤1080p, duration limit), FFmpeg audio extraction, progress updates, retry and failure handling | The job reaches `extracting_audio` complete with `source.mp4` + `audio.wav` on disk |
 | **3. Transcription** | faster-whisper with word timestamps + VAD, sentence segmentation, `transcripts` table, transcript stored as JSON | A real video gets a sentence-level transcript with accurate times |

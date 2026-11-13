@@ -9,58 +9,61 @@ engaging moments, and renders vertical 9:16 clips (20–30 s) with burned-in cap
 > Use only with videos you own or have permission to use. Downloading from YouTube
 > without permission violates YouTube's Terms of Service.
 
-## Recommended setup on Windows: WSL2
+## Requirements (Windows)
 
-Windows Smart App Control blocks native DLLs used by faster-whisper, the Anthropic SDK
-and psycopg, so the backend runs inside WSL2 (Ubuntu), where everything works natively.
+| Tool | Install | Notes |
+|------|---------|-------|
+| Python 3.12 | python.org or `py` launcher | 3.11–3.13 supported |
+| Node.js LTS | `winget install OpenJS.NodeJS.LTS` | |
+| FFmpeg | `winget install Gyan.FFmpeg` | set `FFMPEG_PATH` / `FFPROBE_PATH` in `.env` if not on PATH |
+| PostgreSQL 16 | `winget install PostgreSQL.PostgreSQL.16` | used for data **and** as the job queue |
+| Claude Code | installed and logged in | Claude is called via `claude -p` with your subscription; no API key |
 
-1. In an **administrator** PowerShell: `wsl --install -d Ubuntu-24.04`, then restart.
-2. Open **Ubuntu** from the Start menu and create a Linux username and password.
-3. In Ubuntu:
-   ```bash
-   cd /mnt/c/Users/<you>/yt-clip-generator
-   bash scripts/setup-wsl.sh
-   ```
-   This installs Python, FFmpeg, Redis, PostgreSQL and Node.js, creates the database and
-   virtualenv, installs all packages and runs the tests.
-4. Claude is called through the Claude Code CLI with your subscription (no API key).
-   In `backend/.env` set `CLAUDE_CLI_PATH=/mnt/c/Users/<you>/.local/bin/claude.exe`
-   to use the Windows install, or install Claude Code inside Ubuntu and log in.
+No Redis is needed on Windows: Celery uses PostgreSQL as its queue. On Linux/macOS you
+can use Redis instead (`docker compose up -d`, then remove the `CELERY_*` lines from `.env`).
 
-The manual steps below are for Linux/macOS or a Windows machine without Smart App Control.
+### Smart App Control compatibility
 
-## Prerequisites
+Windows Smart App Control blocks some native DLLs. The project avoids them:
+- PostgreSQL driver: **pg8000** (pure Python) instead of psycopg.
+- Frontend bundler: Rollup's **WebAssembly build** (`overrides` in `package.json`).
+- Claude: the signed `claude.exe` instead of the Anthropic SDK.
 
-| Tool | Version | Install (Windows) |
-|------|---------|-------------------|
-| Python | 3.12 | already installed (`py -3.12`) |
-| Node.js | 20 LTS or newer | `winget install OpenJS.NodeJS.LTS` |
-| FFmpeg | 6 or newer | `winget install Gyan.FFmpeg` |
-| PostgreSQL + Redis | 16 / 7 | `docker compose up -d` (needs Docker Desktop), or run them in WSL2 |
+## Setup
 
-## Backend
+```powershell
+# 1. Database user and database (run once; asks for the postgres superuser password)
+& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -h localhost -U postgres -c "CREATE ROLE clipgen LOGIN PASSWORD 'clipgen';" -c "CREATE DATABASE clipgen OWNER clipgen;"
 
-```bash
+# 2. Backend
 cd backend
 py -3.12 -m venv .venv
-.venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
-pip install -r requirements-dev.txt
-copy .env.example .env            # Claude Code must be installed and logged in
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+copy .env.example .env      # then set FFMPEG_PATH / FFPROBE_PATH if needed
 
-uvicorn app.main:app --reload     # http://localhost:8000/api/docs
-celery -A app.worker.celery_app worker --loglevel=INFO --pool=solo   # second terminal
-pytest                            # tests
-ruff check .                      # lint
+# 3. Frontend
+cd ..\frontend
+npm install
 ```
 
-Check dependencies: `GET http://localhost:8000/api/health/ready`.
+## Run
 
-## Frontend
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
+```
 
-```bash
-cd frontend
-npm install
-npm run dev                       # http://localhost:5173 (proxies /api to :8000)
+This opens three windows: API (`:8000`), Celery worker, and frontend (`:5173`).
+Open http://localhost:5173. The badge in the header shows whether every dependency is ready
+(details at http://localhost:8000/api/health/ready).
+
+## Tests and lint
+
+```powershell
+cd backend
+.venv\Scripts\python -m pytest              # unit tests
+.venv\Scripts\python -m ruff check .
+$env:RUN_CLAUDE_CLI_TESTS = "1"; .venv\Scripts\python -m pytest -m integration   # real Claude call
+cd ..\frontend; npm run build
 ```
 
 ## Project layout
@@ -68,5 +71,6 @@ npm run dev                       # http://localhost:5173 (proxies /api to :8000
 ```
 backend/   FastAPI API, Celery worker, services, Alembic migrations, tests
 frontend/  React + Vite + Tailwind
+scripts/   dev.ps1 (start everything)
 docs/      Architecture and roadmap
 ```

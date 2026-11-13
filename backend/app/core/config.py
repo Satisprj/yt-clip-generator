@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     # --- Database / queue ---
-    database_url: str = "postgresql+psycopg://clipgen:clipgen@localhost:5432/clipgen"
+    database_url: str = "postgresql+pg8000://clipgen:clipgen@localhost:5432/clipgen"
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None

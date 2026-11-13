@@ -46,7 +46,7 @@ def readiness(response: Response) -> ReadinessResponse:
     """Checks every dependency the processing pipeline needs."""
     checks = {
         "database": _run_check("database", system_checks.check_database),
-        "redis": _run_check("redis", system_checks.check_redis),
+        "queue": _run_check("queue", system_checks.check_queue),
         "ffmpeg": _run_check("ffmpeg", system_checks.check_ffmpeg),
         "claude_cli": _run_check("claude_cli", system_checks.check_claude_cli),
     }

@@ -16,7 +16,11 @@ from app.core.config import get_settings
 @lru_cache
 def get_engine() -> Engine:
     url = get_settings().database_url
-    connect_args = {"connect_timeout": 5} if url.startswith("postgresql") else {}
+    connect_args: dict[str, int] = {}
+    if url.startswith("postgresql+pg8000"):
+        connect_args = {"timeout": 5}
+    elif url.startswith("postgresql"):
+        connect_args = {"connect_timeout": 5}
     return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
 

@@ -6,7 +6,8 @@ Each check returns None on success and raises on failure.
 import shutil
 
 import redis
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.db.session import get_engine
@@ -18,14 +19,29 @@ def check_database() -> None:
         conn.execute(text("SELECT 1"))
 
 
-def check_redis() -> None:
-    client = redis.Redis.from_url(
-        get_settings().redis_url, socket_connect_timeout=3, socket_timeout=3
-    )
-    try:
-        client.ping()
-    finally:
-        client.close()
+def check_queue() -> None:
+    """Check the Celery broker: Redis, or PostgreSQL via SQLAlchemy (`sqla+...`)."""
+    url = get_settings().broker_url
+    if url.startswith(("redis://", "rediss://")):
+        client = redis.Redis.from_url(url, socket_connect_timeout=3, socket_timeout=3)
+        try:
+            client.ping()
+        finally:
+            client.close()
+    elif url.startswith("sqla+"):
+        # Reuse the app engine when the broker is the app database; otherwise connect once.
+        db_url = url.removeprefix("sqla+")
+        if db_url == get_settings().database_url:
+            check_database()
+            return
+        engine = create_engine(db_url, poolclass=NullPool)
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        finally:
+            engine.dispose()
+    else:
+        raise RuntimeError(f"Unsupported broker URL scheme: {url.split(':', 1)[0]}")
 
 
 def check_claude_cli() -> None:
