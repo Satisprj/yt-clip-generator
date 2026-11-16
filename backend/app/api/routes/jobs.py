@@ -35,3 +35,9 @@ def list_jobs(
 @router.get("/{job_id}", response_model=JobRead)
 def get_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
     return JobRead.model_validate(job_service.get_job(db, job_id))
+
+
+@router.post("/{job_id}/retry", response_model=JobRead)
+def retry_job(job_id: uuid.UUID, db: DbSession) -> JobRead:
+    """Re-queue a failed job; work already finished (e.g. the download) is reused."""
+    return JobRead.model_validate(job_service.retry_job(db, job_id))

@@ -5,8 +5,10 @@ Run the worker (from backend/):
     celery -A app.worker.celery_app worker --loglevel=INFO               # Linux/macOS
 """
 
+import logging
+
 from celery import Celery
-from celery.signals import setup_logging
+from celery.signals import setup_logging, worker_ready
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -41,3 +43,13 @@ celery_app.conf.update(
 @setup_logging.connect
 def _configure_worker_logging(**_: object) -> None:
     configure_logging(settings.log_level)
+
+
+@worker_ready.connect
+def _recover_interrupted_jobs(**_: object) -> None:
+    from app.worker.recovery import fail_interrupted_jobs
+
+    try:
+        fail_interrupted_jobs()
+    except Exception:  # never stop the worker from starting
+        logging.getLogger(__name__).exception("Could not check for interrupted jobs")

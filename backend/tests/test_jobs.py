@@ -1,12 +1,14 @@
+import shutil
 import uuid
 
 import pytest
 
-from app.core.exceptions import ExternalServiceError, InvalidInputError
+from app.core.exceptions import ExternalServiceError, InvalidInputError, ServiceUnavailableError
 from app.models import Job, JobStatus
-from app.services import youtube
+from app.services import storage, youtube
 from app.services.youtube import VideoInfo
 from app.worker import pipeline, tasks
+from app.worker.context import StageContext
 
 ID = "jNQXAC9IVRw"
 INFO = VideoInfo(ID, "Me at the zoo", "jawed", 600, "https://i.ytimg.com/x.jpg", False)
@@ -18,6 +20,26 @@ def enqueued(monkeypatch):
     sent: list[str] = []
     monkeypatch.setattr(tasks.process_job, "delay", lambda job_id: sent.append(job_id))
     return sent
+
+
+@pytest.fixture
+def fake_youtube(monkeypatch, sample_video):
+    """Replace network calls: metadata returns INFO, download copies a real sample video."""
+    calls = {"download": 0}
+
+    def fake_download(url, destination, *, on_progress=None, check_space=None):
+        calls["download"] += 1
+        if check_space:
+            check_space(1_000_000)
+        if on_progress:
+            on_progress(0.5, "Downloading video: 50%")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(sample_video, destination)
+        return destination
+
+    monkeypatch.setattr(youtube, "fetch_video_info", lambda url: INFO)
+    monkeypatch.setattr(youtube, "download_video", fake_download)
+    return calls
 
 
 # --- API -------------------------------------------------------------------
@@ -74,6 +96,28 @@ def test_list_jobs_newest_first_with_pagination(client, db, enqueued):
     assert client.get("/api/jobs", params={"limit": 500}).status_code == 422
 
 
+def test_retry_failed_job(client, db, enqueued):
+    job = _queued_job(db)
+    job.status, job.error_message, job.progress = JobStatus.FAILED, "boom", 40
+    db.commit()
+
+    response = client.post(f"/api/jobs/{job.id}/retry")
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["status"], body["progress"], body["error_message"]) == ("queued", 0, None)
+    assert body["completed_at"] is None
+    assert enqueued == [str(job.id)]
+
+
+def test_retry_rejects_non_failed_job(client, db, enqueued):
+    job = _queued_job(db)
+    response = client.post(f"/api/jobs/{job.id}/retry")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "conflict"
+    assert enqueued == []
+    assert client.post(f"/api/jobs/{uuid.uuid4()}/retry").status_code == 404
+
+
 # --- Pipeline --------------------------------------------------------------
 
 
@@ -89,8 +133,7 @@ def _reload(db, job: Job) -> Job:
     return db.get(Job, job.id)
 
 
-def test_pipeline_fetches_info_and_completes(db, monkeypatch):
-    monkeypatch.setattr(youtube, "fetch_video_info", lambda url: INFO)
+def test_pipeline_downloads_and_extracts_audio(db, storage_dir, fake_youtube):
     job = _queued_job(db)
 
     assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
@@ -98,20 +141,62 @@ def test_pipeline_fetches_info_and_completes(db, monkeypatch):
     assert job.status == JobStatus.COMPLETED
     assert job.progress == 100
     assert (job.title, job.channel, job.duration_seconds) == ("Me at the zoo", "jawed", 600)
-    assert job.completed_at is not None
-    assert job.error_message is None
+    assert job.completed_at is not None and job.error_message is None
+
+    files = storage.job_files(job.id)
+    assert files.dir.parent == storage_dir / "jobs"
+    assert files.source_video.is_file()
+    assert files.audio.is_file()
 
 
-def test_pipeline_keeps_info_when_video_rejected(db, monkeypatch):
+def test_pipeline_reuses_existing_files_on_retry(db, storage_dir, fake_youtube):
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    audio_mtime = storage.job_files(job.id).audio.stat().st_mtime_ns
+
+    job = _reload(db, job)
+    job.status = JobStatus.QUEUED  # as if retried
+    db.commit()
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert fake_youtube["download"] == 1  # second run skipped the download
+    assert storage.job_files(job.id).audio.stat().st_mtime_ns == audio_mtime
+
+
+def test_pipeline_rejects_video_without_audio(db, storage_dir, fake_youtube, monkeypatch,
+                                               silent_video):
+    def download_silent(url, destination, **kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(silent_video, destination)
+        return destination
+
+    monkeypatch.setattr(youtube, "download_video", download_silent)
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
+    assert "no audio track" in _reload(db, job).error_message
+
+
+def test_pipeline_fails_when_disk_is_full(db, storage_dir, fake_youtube, monkeypatch):
+    def no_space(directory, required_bytes):
+        raise ServiceUnavailableError("Not enough disk space: 0.1 GB free.")
+
+    monkeypatch.setattr(storage, "ensure_free_space", no_space)
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
+    job = _reload(db, job)
+    assert job.error_message.startswith("Not enough disk space")
+    assert job.title == "Me at the zoo"
+
+
+def test_pipeline_keeps_info_when_video_rejected(db, storage_dir, fake_youtube, monkeypatch):
     too_long = VideoInfo(ID, "Very long stream", "c", 5 * 3600, None, False)
     monkeypatch.setattr(youtube, "fetch_video_info", lambda url: too_long)
     job = _queued_job(db)
 
     assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
     job = _reload(db, job)
-    assert job.status == JobStatus.FAILED
     assert "limit" in job.error_message
     assert job.title == "Very long stream"  # details kept for the user
+    assert fake_youtube["download"] == 0
 
 
 @pytest.mark.parametrize(
@@ -119,14 +204,15 @@ def test_pipeline_keeps_info_when_video_rejected(db, monkeypatch):
     [
         (InvalidInputError("This video is private."), "This video is private."),
         (ExternalServiceError("YouTube error: HTTP 503"), "YouTube error: HTTP 503"),
-        (RuntimeError("secret internals"), "Unexpected error while fetching video information"),
+        (RuntimeError("secret internals"), "Unexpected error while downloading video"),
     ],
 )
-def test_pipeline_records_failures(db, monkeypatch, error, expected):
-    def boom(url):
+def test_pipeline_records_download_failures(db, storage_dir, fake_youtube, monkeypatch,
+                                            error, expected):
+    def boom(url, destination, **kwargs):
         raise error
 
-    monkeypatch.setattr(youtube, "fetch_video_info", boom)
+    monkeypatch.setattr(youtube, "download_video", boom)
     job = _queued_job(db)
 
     assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
@@ -144,7 +230,22 @@ def test_pipeline_skips_finished_and_missing_jobs(db, monkeypatch):
     assert pipeline.run_pipeline(uuid.uuid4()) is None
 
 
-def test_process_job_task_runs_pipeline(db, monkeypatch):
-    monkeypatch.setattr(youtube, "fetch_video_info", lambda url: INFO)
+def test_process_job_task_runs_pipeline(db, storage_dir, fake_youtube):
     job = _queued_job(db)
     assert tasks.process_job.apply(args=[str(job.id)]).get() == "completed"
+
+
+# --- Progress reporting ----------------------------------------------------
+
+
+def test_stage_context_maps_and_throttles_progress(db):
+    job = _queued_job(db)
+    ctx = StageContext(db, job, start_percent=10, span_percent=50, min_interval=60)
+
+    ctx.report(0.5, "half")       # first report is saved
+    assert (job.progress, job.stage_message) == (35, "half")
+    ctx.report(0.8, "throttled")  # within min_interval: ignored
+    assert (job.progress, job.stage_message) == (35, "half")
+    ctx.report(1.0, "done")       # completion is always saved
+    assert (job.progress, job.stage_message) == (60, "done")
+    assert _reload(db, job).progress == 60

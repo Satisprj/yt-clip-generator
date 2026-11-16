@@ -214,3 +214,18 @@ subscription login is always used.
 - Each call takes a few seconds to start; the pipeline makes only a handful of calls per video.
 - Calls count toward the subscription's usage limits; a limit error fails the job with a
   clear message, and the job can be retried later.
+
+## 11. Reliability: progress, resume and interrupted jobs
+
+- **Progress**: each stage reports its own 0–1 progress through `StageContext.report`, which
+  maps it onto the job's overall percentage (by stage weight) and saves at most every 1.5 s.
+- **Idempotent stages**: download and audio extraction skip work whose output already
+  exists and is valid (checked with ffprobe). Audio is written to `audio.partial.wav` and
+  renamed when complete, so a half-written file never looks finished.
+- **Resume**: yt-dlp keeps `.part` files; a retried job continues the download.
+- **Interrupted jobs**: when the worker starts, jobs left in a running status (worker was
+  closed or the PC restarted) are marked failed with "interrupted, click Retry". This
+  assumes a single worker, which is the Windows setup (`--pool=solo`).
+- **Retry**: `POST /api/jobs/{id}/retry` (failed jobs only) re-queues the job.
+- **Download size**: 1080p H.264 is about 20–25 MB per minute of video. On a slow
+  connection, set `MAX_DOWNLOAD_HEIGHT=720` to roughly halve download time.

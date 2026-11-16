@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { retryJob } from '../api/jobs.js'
 import ProgressBar from '../components/ProgressBar.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import VideoThumbnail from '../components/VideoThumbnail.jsx'
@@ -14,9 +16,40 @@ function Detail({ label, children }) {
   )
 }
 
+function RetryButton({ jobId, onRetried }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleRetry() {
+    setBusy(true)
+    setError(null)
+    try {
+      onRetried(await retryJob(jobId))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3">
+      <button
+        onClick={handleRetry}
+        disabled={busy}
+        className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold hover:bg-rose-400 disabled:opacity-50"
+      >
+        {busy ? 'Retrying…' : 'Retry'}
+      </button>
+      <span className="text-xs text-slate-400">Finished steps (like the download) are reused.</span>
+      {error && <span role="alert" className="text-sm text-rose-300">{error}</span>}
+    </div>
+  )
+}
+
 export default function JobPage() {
   const { jobId } = useParams()
-  const { job, error, loading } = useJob(jobId)
+  const { job, error, loading, replaceJob } = useJob(jobId)
 
   if (loading) {
     return <p className="text-center text-slate-400">Loading job…</p>
@@ -64,6 +97,7 @@ export default function JobPage() {
             {job.error_message}
           </p>
         )}
+        {failed && <RetryButton jobId={job.id} onRetried={replaceJob} />}
       </div>
 
       <dl className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">

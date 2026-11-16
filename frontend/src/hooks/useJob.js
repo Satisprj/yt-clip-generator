@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getJob } from '../api/jobs.js'
 import { isTerminal } from '../utils/jobStatus.js'
 
-/** Loads a job and keeps polling until it completes or fails. */
+/**
+ * Loads a job and keeps polling until it completes or fails.
+ * `replaceJob(job)` swaps in a fresh job (e.g. after a retry) and restarts polling.
+ */
 export function useJob(jobId, intervalMs = 2000) {
   const [state, setState] = useState({ job: null, error: null, loading: true })
+  const [generation, setGeneration] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -28,14 +32,23 @@ export function useJob(jobId, intervalMs = 2000) {
       if (keepPolling && !cancelled) timer = setTimeout(load, intervalMs)
     }
 
-    setState({ job: null, error: null, loading: true })
     load()
     return () => {
       cancelled = true
       controller?.abort()
       clearTimeout(timer)
     }
-  }, [jobId, intervalMs])
+  }, [jobId, intervalMs, generation])
 
-  return state
+  // Reset when navigating to a different job.
+  useEffect(() => {
+    setState({ job: null, error: null, loading: true })
+  }, [jobId])
+
+  const replaceJob = useCallback((job) => {
+    setState({ job, error: null, loading: false })
+    setGeneration((g) => g + 1)
+  }, [])
+
+  return { ...state, replaceJob }
 }

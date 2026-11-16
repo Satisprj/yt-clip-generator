@@ -3,6 +3,7 @@
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
 from app.core.config import get_settings
-from app.core.exceptions import ExternalServiceError, InvalidInputError
+from app.core.exceptions import AppError, ExternalServiceError, InvalidInputError
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,108 @@ def fetch_video_info(url: str) -> VideoInfo:
         thumbnail_url=info.get("thumbnail"),
         is_live=bool(info.get("is_live")),
     )
+
+
+DownloadProgress = Callable[[float, str], None]
+
+
+def _format_selector(max_height: int) -> dict[str, Any]:
+    # Prefer H.264 + AAC up to max_height: decodes everywhere (FFmpeg, OpenCV, browsers).
+    # Fall back to any codec, then to a single combined file.
+    return {
+        "format": (f"bv*[height<={max_height}]+ba/b[height<={max_height}]/bv*+ba/b"),
+        "format_sort": ["vcodec:h264", f"res:{max_height}", "acodec:m4a"],
+        "merge_output_format": "mp4",
+        "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
+    }
+
+
+def _estimated_size(info: dict[str, Any]) -> int | None:
+    formats = info.get("requested_formats") or [info]
+    sizes = [f.get("filesize") or f.get("filesize_approx") for f in formats]
+    return sum(sizes) if all(sizes) else None
+
+
+def download_video(
+    url: str,
+    destination: Path,
+    *,
+    on_progress: DownloadProgress | None = None,
+    check_space: Callable[[int | None], None] | None = None,
+) -> Path:
+    """Download the video (merged to MP4) to `destination`.
+
+    `check_space(estimated_bytes)` is called after format selection and before the
+    download starts. Partial downloads are resumed if the job is retried.
+    """
+    settings = get_settings()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    report = on_progress or (lambda fraction, message: None)
+    downloaded: dict[str, int] = {}
+    totals: dict[str, int] = {}
+
+    def progress_hook(d: dict[str, Any]) -> None:
+        fmt = str((d.get("info_dict") or {}).get("format_id") or d.get("filename"))
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        if total:
+            totals[fmt] = int(total)
+        if d.get("status") == "downloading":
+            downloaded[fmt] = int(d.get("downloaded_bytes") or 0)
+        elif d.get("status") == "finished":
+            downloaded[fmt] = totals.get(fmt, downloaded.get(fmt, 0))
+        else:
+            return
+        expected = max(sum(totals.values()), 1)
+        fraction = min(0.99, sum(downloaded.values()) / expected)
+        speed = d.get("speed")
+        speed_text = f" at {speed / 1e6:.1f} MB/s" if speed else ""
+        report(fraction, f"Downloading video: {fraction:.0%}{speed_text}")
+
+    def postprocessor_hook(d: dict[str, Any]) -> None:
+        if d.get("status") == "started":
+            name = str(d.get("postprocessor") or "")  # e.g. "FFmpegMerger"
+            step = "Merging video and audio" if "Merger" in name else "Finalizing video file"
+            report(0.99, step)
+
+    options = {
+        **ydl_base_options(),
+        **_format_selector(settings.max_download_height),
+        "outtmpl": {"default": str(destination.with_suffix("")) + ".%(ext)s"},
+        "progress_hooks": [progress_hook],
+        "postprocessor_hooks": [postprocessor_hook],
+        "noprogress": True,
+        "continuedl": True,
+        "retries": 5,
+        "fragment_retries": 10,
+        "concurrent_fragment_downloads": 4,
+    }
+    try:
+        with YoutubeDL(options) as ydl:
+            # Resolve formats first (no download) so the expected size is known up front.
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ExternalServiceError("YouTube returned no video information.")
+            for f in info.get("requested_formats") or [info]:
+                if f.get("format_id") and (f.get("filesize") or f.get("filesize_approx")):
+                    totals[str(f["format_id"])] = int(f.get("filesize") or f["filesize_approx"])
+            if check_space:
+                check_space(_estimated_size(info))
+            ydl.process_ie_result(info, download=True)
+    except DownloadError as exc:
+        raise _translate_error(exc) from exc
+    except AppError:
+        raise  # our own errors (e.g. not enough disk space) pass through unchanged
+    except Exception as exc:
+        logger.exception("Unexpected yt-dlp download failure for %s", url)
+        raise ExternalServiceError(f"Video download failed: {exc}") from exc
+
+    if not destination.is_file():
+        produced = sorted(p.name for p in destination.parent.glob(destination.stem + ".*"))
+        raise ExternalServiceError(
+            f"Download finished but {destination.name} was not created (found: {produced})."
+        )
+    report(1.0, "Download complete")
+    return destination
 
 
 def format_duration(seconds: int) -> str:

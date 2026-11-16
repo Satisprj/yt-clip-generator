@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # --- Storage and limits ---
     storage_dir: Path = Path("storage")
     max_video_duration_seconds: int = Field(default=3 * 3600, gt=0)
+    max_download_height: int = Field(default=1080, ge=144, le=2160)
+    # Free space to keep on top of the expected download size.
+    min_free_disk_mb: int = Field(default=2048, ge=0)
     clip_min_seconds: int = Field(default=20, gt=0)
     clip_max_seconds: int = Field(default=30, gt=0)
     max_clips_per_video: int = Field(default=10, gt=0, le=50)
