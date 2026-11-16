@@ -48,7 +48,7 @@ def _migrated_db():
 def db(_migrated_db):
     """A session on a clean test database."""
     with _migrated_db.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE jobs CASCADE"))
+        conn.execute(text("TRUNCATE TABLE jobs, platform_accounts CASCADE"))
     session = get_session_factory()()
     try:
         yield session

@@ -1,8 +1,9 @@
 from fastapi import APIRouter
 
-from app.api.routes import clips, health, jobs
+from app.api.routes import clips, health, jobs, publishing
 
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(jobs.router)
 api_router.include_router(clips.router)
+api_router.include_router(publishing.router)

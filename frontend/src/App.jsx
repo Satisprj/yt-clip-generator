@@ -4,6 +4,7 @@ import HistoryPage from './pages/HistoryPage.jsx'
 import HomePage from './pages/HomePage.jsx'
 import JobPage from './pages/JobPage.jsx'
 import NotFoundPage from './pages/NotFoundPage.jsx'
+import SettingsPage from './pages/SettingsPage.jsx'
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
         <Route index element={<HomePage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="jobs/:jobId" element={<JobPage />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

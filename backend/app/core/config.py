@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     job_retention_days: int = Field(default=0, ge=0)
     cleanup_interval_hours: float = Field(default=6, ge=0)
 
+    # --- Publishing ---
+    # Where the browser returns after connecting an account.
+    frontend_url: str = "http://localhost:5173"
+    # Encrypts stored OAuth tokens. Empty = a key is generated in storage/secret.key.
+    token_encryption_key: SecretStr | None = None
+    # YouTube (Google Cloud OAuth client, type "Web application")
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    google_redirect_uri: str = "http://localhost:5173/api/integrations/youtube/callback"
+    youtube_default_privacy: Literal["private", "unlisted", "public"] = "private"
+    youtube_category_id: str = "22"  # People & Blogs
+
     # --- Rendering ---
     render_width: int = Field(default=1080, ge=144)
     render_height: int = Field(default=1920, ge=256)
@@ -89,7 +101,8 @@ class Settings(BaseSettings):
         return value
 
     @field_validator("ytdlp_cookies_file", "js_runtime_path", "whisper_language",
-                     "subtitle_font", mode="before")
+                     "subtitle_font", "token_encryption_key", "google_client_id",
+                     "google_client_secret", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

@@ -19,6 +19,7 @@ export default function Layout() {
           <nav className="flex items-center gap-1">
             <NavLink to="/" end className={navClass}>New</NavLink>
             <NavLink to="/history" className={navClass}>History</NavLink>
+            <NavLink to="/settings" className={navClass}>Settings</NavLink>
           </nav>
           <BackendStatus />
         </div>

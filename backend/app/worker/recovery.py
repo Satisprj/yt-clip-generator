@@ -45,6 +45,11 @@ def fail_interrupted_jobs() -> int:
         )
         db.commit()
         count = result.rowcount or 0
+        from app.services.publishing.service import fail_interrupted_publications
+
+        uploads = fail_interrupted_publications(db)
+    if uploads:
+        logger.warning("Marked %d interrupted upload(s) as failed; they can be retried.", uploads)
     if count:
         logger.warning("Marked %d interrupted job(s) as failed; they can be retried.", count)
     return count

@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { clipFileUrl, listClips } from '../api/jobs.js'
+import { usePublications } from '../hooks/usePublications.js'
+import PublicationBadges from './PublicationBadges.jsx'
+import PublishDialog from './PublishDialog.jsx'
 import { formatDuration } from '../utils/format.js'
 
 const CATEGORY_STYLES = {
@@ -45,7 +48,7 @@ function CopyButton({ text }) {
   )
 }
 
-function ClipCard({ clip, videoId }) {
+function ClipCard({ clip, videoId, publications, onPublish, onPublicationsChanged }) {
   const [preview, setPreview] = useState(false)
   const [details, setDetails] = useState(false)
   const start = Math.floor(clip.start_seconds)
@@ -100,6 +103,7 @@ function ClipCard({ clip, videoId }) {
         </div>
       )}
 
+      <PublicationBadges publications={publications} onChanged={onPublicationsChanged} />
       {clip.render_status === 'failed' && (
         <p role="alert" className="mt-2 rounded-md border border-rose-900 bg-rose-950/50 p-2 text-xs text-rose-200">
           Rendering failed: {clip.render_error}
@@ -124,6 +128,12 @@ function ClipCard({ clip, videoId }) {
             >
               ⬇ Subtitles (.srt)
             </a>
+            <button
+              onClick={() => onPublish(clip)}
+              className="rounded-md bg-sky-600 px-3 py-1 text-xs font-semibold hover:bg-sky-500"
+            >
+              📤 Publish
+            </button>
           </>
         ) : (
           <button
@@ -167,6 +177,8 @@ function ClipCard({ clip, videoId }) {
 /** Highlights chosen for a job, best first. `refreshKey` changes when the list should reload. */
 export default function ClipsPanel({ jobId, videoId, refreshKey }) {
   const [state, setState] = useState({ clips: null, error: null })
+  const [dialog, setDialog] = useState(null) // {clip} for one clip, {all: true} for every clip
+  const { byClip, refresh: refreshPublications } = usePublications(jobId)
 
   // Start empty for a new job...
   useEffect(() => {
@@ -189,15 +201,45 @@ export default function ClipsPanel({ jobId, videoId, refreshKey }) {
   if (!state.clips) return <p className="text-sm text-slate-400">Loading clips…</p>
   if (state.clips.length === 0) return null
 
+  const readyCount = state.clips.filter((c) => c.render_status === 'ready').length
+
   return (
     <section>
-      <h2 className="text-lg font-semibold">Highlights <span className="text-slate-500">({state.clips.length})</span></h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Highlights <span className="text-slate-500">({state.clips.length})</span></h2>
+        {readyCount > 0 && (
+          <button
+            onClick={() => setDialog({ all: true })}
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-sm font-semibold hover:bg-sky-500"
+          >
+            📤 Publish all ({readyCount})
+          </button>
+        )}
+      </div>
       <p className="mt-1 text-sm text-slate-400">
         Chosen by AI, ranked by viral potential. Vertical 1080×1920 clips with captions, ready to post.
       </p>
       <ul className="mt-4 grid gap-4 lg:grid-cols-2">
-        {state.clips.map((clip) => <ClipCard key={clip.id} clip={clip} videoId={videoId} />)}
+        {state.clips.map((clip) => (
+          <ClipCard
+            key={clip.id}
+            clip={clip}
+            videoId={videoId}
+            publications={byClip[clip.id]}
+            onPublish={(c) => setDialog({ clip: c })}
+            onPublicationsChanged={refreshPublications}
+          />
+        ))}
       </ul>
+      {dialog && (
+        <PublishDialog
+          clip={dialog.clip}
+          jobId={jobId}
+          clipCount={readyCount}
+          onClose={() => setDialog(null)}
+          onPublished={refreshPublications}
+        />
+      )}
     </section>
   )
 }
