@@ -84,40 +84,51 @@ def transcribe(
     duration_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
 ) -> TranscriptionResult:
-    """Transcribe a 16 kHz WAV file. Progress is reported as each segment finishes."""
+    """Transcribe a 16 kHz WAV file. Progress is reported as each segment finishes.
+
+    Voice-activity detection (VAD) skips silence and music, which is faster and prevents
+    hallucinated text. It can also discard speech over loud music (music videos, vlogs
+    with a soundtrack); if it leaves no words at all, the audio is transcribed again
+    without it.
+    """
     settings = get_settings()
     model = get_model()
     audio = load_wav(audio_path)
     started = time.monotonic()
-    try:
-        segments, info = model.transcribe(
-            audio,
-            language=settings.whisper_language,
-            beam_size=settings.whisper_beam_size,
-            word_timestamps=True,
-            vad_filter=True,  # skip silence/music: faster and fewer hallucinations
-            condition_on_previous_text=False,  # avoids repetition loops on long audio
-        )
-        total = duration_seconds or info.duration or 0
-        words: list[Word] = []
-        for segment in segments:  # generator: decoding happens while iterating
-            for w in segment.words or []:
-                if w.word.strip():
-                    words.append(Word(start=round(w.start, 3), end=round(w.end, 3),
-                                      text=w.word, probability=round(w.probability, 3)))
-            if on_progress and total:
-                on_progress(min(1.0, segment.end / total))
-    except TranscriptionError:
-        raise
-    except Exception as exc:
-        logger.exception("Transcription failed for %s", audio_path)
-        raise TranscriptionError(f"Transcription failed: {exc}") from exc
+    words: list[Word] = []
+    info = None
+    for use_vad in (True, False):
+        try:
+            segments, info = model.transcribe(
+                audio,
+                language=settings.whisper_language,
+                beam_size=settings.whisper_beam_size,
+                word_timestamps=True,
+                vad_filter=use_vad,
+                condition_on_previous_text=False,  # avoids repetition loops on long audio
+            )
+            total = duration_seconds or info.duration or 0
+            for segment in segments:  # generator: decoding happens while iterating
+                for w in segment.words or []:
+                    if w.word.strip():
+                        words.append(Word(start=round(w.start, 3), end=round(w.end, 3),
+                                          text=w.word, probability=round(w.probability, 3)))
+                if on_progress and total:
+                    on_progress(min(0.99, segment.end / total))
+        except Exception as exc:
+            logger.exception("Transcription failed for %s", audio_path)
+            raise TranscriptionError(f"Transcription failed: {exc}") from exc
+        if words:
+            break
+        if use_vad:
+            logger.warning("VAD found no speech in %s; retrying without VAD", audio_path.name)
 
+    assert info is not None
     elapsed = time.monotonic() - started
     logger.info("Transcribed %.0fs of audio in %.0fs (%.2fx real time), %d words, lang=%s",
                 info.duration, elapsed, info.duration / max(elapsed, 0.01), len(words),
                 info.language)
-    if on_progress:
+    if on_progress and words:
         on_progress(1.0)
     return TranscriptionResult(
         language=info.language,

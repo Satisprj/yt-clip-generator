@@ -76,3 +76,14 @@ frontend/  React + Vite + Tailwind
 scripts/   dev.ps1 (start everything)
 docs/      Architecture and roadmap
 ```
+
+## Performance notes (this setup: i5-1135G7 CPU, ~0.5 MB/s internet)
+
+| Step | Speed | 10-min video | 1-hour video |
+|------|-------|-------------|--------------|
+| Download (1080p) | ~20–25 MB per video minute | ~8 min | ~45 min |
+| Transcription (`small`, int8, CPU) | ~1× real time | ~10 min | ~1 h |
+
+Faster options: `MAX_DOWNLOAD_HEIGHT=720` (about half the download), `WHISPER_MODEL=base`
+(about 2–3× faster transcription, less accurate), and set `WHISPER_LANGUAGE` if you know the
+language. Retrying a failed job reuses the download, audio and transcript.

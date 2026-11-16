@@ -34,7 +34,10 @@ function Start-DevWindow([string]$title, [string]$dir, [string]$command) {
 }
 
 Start-DevWindow 'clipgen API' $backend "& '$python' -m uvicorn app.main:app --reload --port 8000"
-Start-DevWindow 'clipgen worker' $backend "& '$python' -m celery -A app.worker.celery_app worker --pool=solo --loglevel=INFO"
+# The worker's output is also saved to backend\storage\worker.log for troubleshooting.
+$workerLog = Join-Path $backend 'storage\worker.log'
+New-Item -ItemType Directory -Force (Split-Path $workerLog) | Out-Null
+Start-DevWindow 'clipgen worker' $backend "& '$python' -m celery -A app.worker.celery_app worker --pool=solo --loglevel=INFO 2>&1 | Tee-Object -FilePath '$workerLog'"
 Start-DevWindow 'clipgen frontend' $frontend "& '$npm' run dev"
 
 Write-Host ''
@@ -42,4 +45,5 @@ Write-Host 'Started 3 windows:' -ForegroundColor Cyan
 Write-Host '  App:      http://localhost:5173'
 Write-Host '  API docs: http://localhost:8000/api/docs'
 Write-Host '  Health:   http://localhost:8000/api/health/ready'
+Write-Host "  Worker log: $workerLog"
 Write-Host 'Close the windows (or press Ctrl+C in each) to stop.'

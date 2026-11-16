@@ -241,5 +241,6 @@ subscription login is always used.
   abbreviations), at pauses of 1.2 s or more, and split run-ons longer than 20 s or 60 words
   at a comma or the longest pause. Each sentence keeps its word range, so the AI can pick
   sentence IDs and the code converts them to exact word times.
-- Speed on this laptop's CPU with `small`, int8 and greedy decoding: see the README.
+- Speech over loud music: if VAD keeps no words, transcription is repeated without VAD.
+- Speed on this laptop's CPU (`small`, int8, greedy decoding): about 1x real time.
 - `GET /api/jobs/{id}/transcript` returns sentences (`?include_words=true` adds words).
