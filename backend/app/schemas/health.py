@@ -19,3 +19,8 @@ class CheckResult(BaseModel):
 class ReadinessResponse(BaseModel):
     status: Literal["ok", "degraded"]
     checks: dict[str, CheckResult]
+
+
+class WorkerStatus(BaseModel):
+    alive: bool
+    last_seen_seconds: float | None  # None = no heartbeat file (worker never started)

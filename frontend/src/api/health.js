@@ -8,3 +8,8 @@ export function getHealth(signal) {
 export function getReadiness(signal) {
   return apiRequest('/health/ready', { signal, acceptStatuses: [503] })
 }
+
+/** {alive, last_seen_seconds}: cheap, reads the worker's heartbeat. */
+export function getWorkerStatus(signal) {
+  return apiRequest('/health/worker', { signal })
+}

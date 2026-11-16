@@ -23,6 +23,10 @@ export default function HomePage() {
       const job = await createJob(url.trim())
       navigate(`/jobs/${job.id}`)
     } catch (err) {
+      if (err.code === 'duplicate_job' && err.details?.job_id) {
+        navigate(`/jobs/${err.details.job_id}`)  // already processing: show that job
+        return
+      }
       setSubmitError(err.message)
       setSubmitting(false)
     }

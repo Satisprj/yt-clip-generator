@@ -44,6 +44,16 @@ def check_queue() -> None:
         raise RuntimeError(f"Unsupported broker URL scheme: {url.split(':', 1)[0]}")
 
 
+def check_worker() -> None:
+    from app.worker.heartbeat import STALE_AFTER, heartbeat_age
+
+    age = heartbeat_age()
+    if age is None:
+        raise RuntimeError("No worker is running. Start it with scripts\\dev.ps1.")
+    if age > STALE_AFTER:
+        raise RuntimeError(f"The worker stopped responding {int(age)} s ago. Restart it.")
+
+
 def check_claude_cli() -> None:
     check_cli_version(get_settings().claude_cli_path)
 

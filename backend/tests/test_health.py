@@ -1,6 +1,6 @@
 from app.services import system_checks
 
-ALL_CHECKS = ("check_database", "check_queue", "check_ffmpeg", "check_claude_cli")
+ALL_CHECKS = ("check_database", "check_queue", "check_worker", "check_ffmpeg", "check_claude_cli")
 
 
 def _ok() -> None:
@@ -26,7 +26,7 @@ def test_readiness_all_ok(client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert set(body["checks"]) == {"database", "queue", "ffmpeg", "claude_cli"}
+    assert set(body["checks"]) == {"database", "queue", "worker", "ffmpeg", "claude_cli"}
 
 
 def test_readiness_reports_failed_dependency(client, monkeypatch):

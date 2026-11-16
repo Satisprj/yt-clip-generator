@@ -128,8 +128,9 @@ def test_get_job_and_404(client, db, enqueued):
 
 
 def test_list_jobs_newest_first_with_pagination(client, db, enqueued):
-    ids = [client.post("/api/jobs", json={"url": f"https://youtu.be/{ID}"}).json()["id"]
-           for _ in range(3)]
+    # Three different videos (the same video can't have two active jobs).
+    ids = [client.post("/api/jobs", json={"url": f"https://youtu.be/{vid}"}).json()["id"]
+           for vid in ("aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc")]
     page = client.get("/api/jobs", params={"limit": 2}).json()
     assert page["total"] == 3
     assert [j["id"] for j in page["items"]] == ids[::-1][:2]

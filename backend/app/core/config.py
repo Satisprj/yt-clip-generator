@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     clip_max_seconds: int = Field(default=30, gt=0)
     max_clips_per_video: int = Field(default=10, gt=0, le=50)
 
+    # --- Cleanup (runs in the worker) ---
+    # Delete downloaded source video/audio this many days after a job finishes (clips are
+    # kept; reprocessing downloads again). 0 = never.
+    source_retention_days: int = Field(default=7, ge=0)
+    # Delete finished jobs entirely (including clips) after this many days. 0 = never.
+    job_retention_days: int = Field(default=0, ge=0)
+    cleanup_interval_hours: float = Field(default=6, ge=0)
+
     # --- Rendering ---
     render_width: int = Field(default=1080, ge=144)
     render_height: int = Field(default=1920, ge=256)

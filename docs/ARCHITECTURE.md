@@ -324,3 +324,18 @@ UI: the job page has a stage stepper, an actions bar (Retry, Download all as ZIP
 highlights, Re-render, Free up space, Delete) and clip cards that appear while clips are
 rendering. Each card has a vertical player and download buttons. History shows clip count
 and disk use per job, total disk use, delete, and refreshes itself while jobs are running.
+
+## 16. Hardening (Phase 7)
+
+- **Worker heartbeat** (`app/worker/heartbeat.py`): a daemon thread in the worker writes
+  `storage/worker_heartbeat.json` every 15 s (the PostgreSQL broker can't answer Celery's
+  remote ping). The `worker` readiness check and `GET /api/health/worker` treat more than
+  60 s without a heartbeat as "not running"; the job page shows a warning for running jobs.
+  A clean shutdown removes the file.
+- **One active job per video**: `POST /api/jobs` returns 409 `duplicate_job` with
+  `details.job_id` while another job for the same video is unfinished; the UI opens that job.
+- **Cleanup** (`app/services/cleanup.py`), run by the same thread a minute after start and
+  then every `CLEANUP_INTERVAL_HOURS`: source video and audio of jobs finished more than
+  `SOURCE_RETENTION_DAYS` ago (clips kept), whole jobs older than `JOB_RETENTION_DAYS`
+  (off by default), job folders without a database row (older than 1 h), and leftover
+  `clipgen-*.zip` temp files (older than 1 day). Locked files are skipped and retried next time.

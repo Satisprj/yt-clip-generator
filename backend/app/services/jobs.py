@@ -47,6 +47,14 @@ def create_job(db: Session, url: str) -> Job:
     video_id = extract_video_id(url)
     if video_id is None:
         raise InvalidInputError("Enter a valid YouTube video URL.")
+    active = db.scalar(
+        select(Job.id).where(Job.youtube_video_id == video_id,
+                             Job.status.not_in([JobStatus.COMPLETED, JobStatus.FAILED]))
+        .limit(1)
+    )
+    if active is not None:
+        raise ConflictError("This video is already being processed.", code="duplicate_job",
+                            details={"job_id": str(active)})
 
     job = Job(youtube_url=canonical_url(video_id), youtube_video_id=video_id,
               stage_message="Waiting for a worker")

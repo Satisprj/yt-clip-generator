@@ -8,7 +8,7 @@ Run the worker (from backend/):
 import logging
 
 from celery import Celery
-from celery.signals import setup_logging, worker_ready
+from celery.signals import setup_logging, worker_ready, worker_shutdown
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -45,11 +45,24 @@ def _configure_worker_logging(**_: object) -> None:
     configure_logging(settings.log_level)
 
 
+_maintenance = None
+
+
 @worker_ready.connect
-def _recover_interrupted_jobs(**_: object) -> None:
+def _on_worker_ready(**_: object) -> None:
+    global _maintenance
+    from app.worker.heartbeat import MaintenanceThread
     from app.worker.recovery import fail_interrupted_jobs
 
     try:
         fail_interrupted_jobs()
     except Exception:  # never stop the worker from starting
         logging.getLogger(__name__).exception("Could not check for interrupted jobs")
+    _maintenance = MaintenanceThread()
+    _maintenance.start()
+
+
+@worker_shutdown.connect
+def _on_worker_shutdown(**_: object) -> None:
+    if _maintenance is not None:
+        _maintenance.stop()

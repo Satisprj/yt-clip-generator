@@ -6,7 +6,7 @@ from fastapi import APIRouter, Response
 
 from app import __version__
 from app.core.config import get_settings
-from app.schemas.health import CheckResult, HealthResponse, ReadinessResponse
+from app.schemas.health import CheckResult, HealthResponse, ReadinessResponse, WorkerStatus
 from app.services import system_checks
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,16 @@ def liveness() -> HealthResponse:
     return HealthResponse(
         status="ok", app=settings.app_name, version=__version__, environment=settings.app_env
     )
+
+
+@router.get("/worker", response_model=WorkerStatus)
+def worker_status() -> WorkerStatus:
+    """Cheap check (reads the worker's heartbeat file) for UIs that poll often."""
+    from app.worker.heartbeat import STALE_AFTER, heartbeat_age
+
+    age = heartbeat_age()
+    return WorkerStatus(alive=age is not None and age <= STALE_AFTER,
+                        last_seen_seconds=None if age is None else round(age, 1))
 
 
 def _run_check(name: str, check: Callable[[], None]) -> CheckResult:
@@ -47,6 +57,7 @@ def readiness(response: Response) -> ReadinessResponse:
     checks = {
         "database": _run_check("database", system_checks.check_database),
         "queue": _run_check("queue", system_checks.check_queue),
+        "worker": _run_check("worker", system_checks.check_worker),
         "ffmpeg": _run_check("ffmpeg", system_checks.check_ffmpeg),
         "claude_cli": _run_check("claude_cli", system_checks.check_claude_cli),
     }

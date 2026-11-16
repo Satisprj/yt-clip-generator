@@ -7,6 +7,7 @@ import StatusBadge from '../components/StatusBadge.jsx'
 import TranscriptPanel from '../components/TranscriptPanel.jsx'
 import VideoThumbnail from '../components/VideoThumbnail.jsx'
 import { useJob } from '../hooks/useJob.js'
+import { useWorkerStatus } from '../hooks/useWorkerStatus.js'
 import { formatDateTime, formatDuration } from '../utils/format.js'
 import { isTerminal } from '../utils/jobStatus.js'
 
@@ -26,6 +27,8 @@ function Detail({ label, children }) {
 export default function JobPage() {
   const { jobId } = useParams()
   const { job, error, loading, replaceJob } = useJob(jobId)
+  const running = Boolean(job) && !isTerminal(job.status)
+  const worker = useWorkerStatus(running)
 
   if (loading) {
     return <p className="text-center text-slate-400">Loading job…</p>
@@ -57,6 +60,18 @@ export default function JobPage() {
           </a>
         </div>
       </div>
+
+      {running && worker && !worker.alive && (
+        <div role="alert" className="mt-6 rounded-xl border border-amber-800 bg-amber-950/40 p-4 text-sm text-amber-200">
+          <p className="font-semibold">No worker is running, so this job can't make progress.</p>
+          <p className="mt-1 text-amber-200/80">
+            Start the app with <code className="rounded bg-black/30 px-1">scripts\dev.ps1</code> (or open
+            the “clipgen worker” window). {job.status === 'queued'
+              ? 'The job starts automatically once the worker is up.'
+              : 'The job will then be marked as interrupted; click Retry to continue where it stopped.'}
+          </p>
+        </div>
+      )}
 
       <div className="mt-8 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
         <StageStepper status={job.status} failedStage={job.failed_stage} />
