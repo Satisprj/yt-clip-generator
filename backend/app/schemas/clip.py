@@ -24,4 +24,8 @@ class ClipRead(BaseModel):
     title: str
     description: str
     hashtags: list[str]
+    render_status: str  # pending | ready | failed
+    render_error: str | None
+    layout: str | None  # track (follows the face) | fit (full frame on blurred background)
+    file_size_bytes: int | None
     created_at: datetime

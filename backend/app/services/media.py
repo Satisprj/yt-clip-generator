@@ -94,15 +94,21 @@ def run_ffmpeg(
     duration_seconds: float | None = None,
     on_progress: ProgressCallback | None = None,
     timeout_seconds: float = 3600,
+    cwd: Path | None = None,
 ) -> None:
-    """Run ffmpeg with machine-readable progress; raise MediaError on failure."""
+    """Run ffmpeg with machine-readable progress; raise MediaError on failure.
+
+    `cwd` lets filter arguments use plain relative file names (Windows paths with drive
+    letters need awkward escaping inside FFmpeg filter strings).
+    """
     ffmpeg = _binary(get_settings().ffmpeg_path, "ffmpeg")
     command = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-progress", "pipe:1", "-nostats", *args]
     deadline = time.monotonic() + timeout_seconds
 
     # stderr goes to a temp file so a chatty ffmpeg can never block on a full pipe.
     with tempfile.TemporaryFile() as stderr_file:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr_file)
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr_file,
+                                cwd=str(cwd) if cwd else None)
         try:
             assert proc.stdout is not None
             for raw in proc.stdout:

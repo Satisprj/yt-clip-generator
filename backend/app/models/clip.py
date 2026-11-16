@@ -38,4 +38,14 @@ class Clip(Base):
     description: Mapped[str] = mapped_column(Text)
     hashtags: Mapped[list[str]] = mapped_column(JsonList)
 
+    # --- Rendering (files live in storage/jobs/<job_id>/clips/) ---
+    render_status: Mapped[str] = mapped_column(String(16), default="pending",
+                                               server_default="pending")
+    render_error: Mapped[str | None] = mapped_column(Text)
+    layout: Mapped[str | None] = mapped_column(String(16))  # "track" or "fit"
+    video_file: Mapped[str | None] = mapped_column(String(255))
+    subtitle_file: Mapped[str | None] = mapped_column(String(255))
+    thumbnail_file: Mapped[str | None] = mapped_column(String(255))
+    file_size_bytes: Mapped[int | None] = mapped_column(Integer)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

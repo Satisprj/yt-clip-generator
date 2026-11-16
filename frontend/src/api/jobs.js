@@ -1,4 +1,10 @@
-import { apiRequest } from './client.js'
+import { API_BASE_URL, apiRequest } from './client.js'
+
+/** URL of a rendered clip file: kind is "video", "thumbnail" or "subtitles". */
+export function clipFileUrl(clipId, kind, { download = false } = {}) {
+  const url = `${API_BASE_URL}/clips/${encodeURIComponent(clipId)}/${kind}`
+  return download ? `${url}?download=true` : url
+}
 
 export function createJob(url) {
   return apiRequest('/jobs', { method: 'POST', body: { url } })

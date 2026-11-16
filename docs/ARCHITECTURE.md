@@ -274,3 +274,32 @@ Raw AI responses are saved to `storage/jobs/<id>/highlights.json`. Clips are sto
 `clips` table and served by `GET /api/jobs/{id}/clips`. Measured: about 35–45 s for both
 calls on a 3.5-minute video. A Claude error (e.g. a usage limit) fails the job; Retry reuses
 the download and transcript.
+
+## 14. Rendering (Phase 5)
+
+Per clip (`services/render.py`), in one FFmpeg pass after a short OpenCV analysis:
+
+1. **Reframe plan** (`services/reframe.py`): sample ~4 frames/s, detect faces with the bundled
+   YuNet model (`app/assets`, SHA-256 checked at load), detect scene cuts with colour
+   histograms. If a face is found in at least 35% of samples the layout is **track**: per
+   scene, gaps are filled, the position is smoothed (1 s moving average) with a 6% dead zone,
+   and the camera jumps at cuts. Picking between several faces prefers a large, confident face
+   near the current position (quadratic distance penalty), so two similar faces don't cause
+   ping-pong. Otherwise the layout is **fit**: the whole frame over a blurred, zoomed copy.
+2. **Crop as an expression**: keyframes (simplified within 4 px) become a flat FFmpeg
+   expression of `t`, applied by the `crop` filter. The graph is written to a file
+   (`-/filter_complex`), so there is no command-line escaping or length limit.
+3. **Captions** (`services/subtitles.py`): 1–3 words per caption from word timestamps,
+   broken at sentence ends and pauses; one ASS event per word with the spoken word
+   highlighted; font chosen by language (Arial; Nirmala UI for Devanagari; YaHei, Yu Gothic,
+   Malgun Gothic for CJK) or `SUBTITLE_FONT`. Burned in with libass; `.srt` (CRLF) for download.
+4. **Encode**: H.264 (`RENDER_PRESET`, `RENDER_CRF`), 1080×1920, AAC 160 kbps,
+   loudness normalised to −14 LUFS (the usual target for short-form platforms), `+faststart`.
+   Written to `NN.partial.mp4` and renamed when complete; thumbnail from the result.
+
+Each clip renders independently: a failed clip is marked `failed` with its error and the
+others continue; the job fails only if every clip fails. Retry renders only clips that are not
+`ready`. Measured on this laptop: about 1.8× the clip length (≈55 s for a 30 s clip).
+
+Files are served by `GET /api/clips/{id}/video` (HTTP range requests for seeking;
+`?download=true` for an attachment named after the title), `/thumbnail` and `/subtitles`.

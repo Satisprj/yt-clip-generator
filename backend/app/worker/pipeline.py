@@ -34,6 +34,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(JobStatus.EXTRACTING_AUDIO, "Extracting audio", stages.extract_audio, 5),
     Stage(JobStatus.TRANSCRIBING, "Transcribing speech", stages.transcribe, 40),
     Stage(JobStatus.ANALYZING, "Finding highlights", stages.analyze, 10),
+    Stage(JobStatus.RENDERING, "Rendering clips", stages.render, 25),
 )
 
 

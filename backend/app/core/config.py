@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     clip_max_seconds: int = Field(default=30, gt=0)
     max_clips_per_video: int = Field(default=10, gt=0, le=50)
 
+    # --- Rendering ---
+    render_width: int = Field(default=1080, ge=144)
+    render_height: int = Field(default=1920, ge=256)
+    # x264 speed/size trade-off: ultrafast ... veryfast ... medium (slower = smaller files)
+    render_preset: str = "veryfast"
+    render_crf: int = Field(default=20, ge=0, le=51)  # lower = better quality, bigger files
+    # Caption font; empty = automatic by language (Arial, Nirmala UI for Devanagari, ...)
+    subtitle_font: str | None = None
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -71,7 +80,8 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("ytdlp_cookies_file", "js_runtime_path", "whisper_language", mode="before")
+    @field_validator("ytdlp_cookies_file", "js_runtime_path", "whisper_language",
+                     "subtitle_font", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listClips } from '../api/jobs.js'
+import { clipFileUrl, listClips } from '../api/jobs.js'
 import { formatDuration } from '../utils/format.js'
 
 const CATEGORY_STYLES = {
@@ -52,8 +52,23 @@ function ClipCard({ clip, videoId }) {
   const end = Math.ceil(clip.end_seconds)
   const caption = [clip.title, clip.description, clip.hashtags.join(' ')].filter(Boolean).join('\n\n')
 
+  const ready = clip.render_status === 'ready'
+
   return (
-    <li className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+    <li className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:flex-row">
+      {ready && (
+        <div className="mx-auto w-full max-w-[220px] shrink-0 sm:mx-0 sm:w-[180px]">
+          <video
+            controls
+            preload="none"
+            playsInline
+            poster={clipFileUrl(clip.id, 'thumbnail')}
+            src={clipFileUrl(clip.id, 'video')}
+            className="aspect-[9/16] w-full rounded-lg bg-black object-cover"
+          />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-md bg-slate-800 px-2 py-0.5 font-semibold">#{clip.rank}</span>
         <span className={`rounded-md px-2 py-0.5 capitalize ${CATEGORY_STYLES[clip.category] ?? 'bg-slate-800'}`}>
@@ -85,13 +100,39 @@ function ClipCard({ clip, videoId }) {
         </div>
       )}
 
+      {clip.render_status === 'failed' && (
+        <p role="alert" className="mt-2 rounded-md border border-rose-900 bg-rose-950/50 p-2 text-xs text-rose-200">
+          Rendering failed: {clip.render_error}
+        </p>
+      )}
+      {clip.render_status === 'pending' && (
+        <p className="mt-2 text-xs text-slate-400">Not rendered yet.</p>
+      )}
+
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          onClick={() => setPreview((p) => !p)}
-          className="rounded-md bg-rose-500 px-3 py-1 text-xs font-semibold hover:bg-rose-400"
-        >
-          {preview ? 'Hide preview' : '▶ Preview moment'}
-        </button>
+        {ready ? (
+          <>
+            <a
+              href={clipFileUrl(clip.id, 'video', { download: true })}
+              className="rounded-md bg-rose-500 px-3 py-1 text-xs font-semibold hover:bg-rose-400"
+            >
+              ⬇ Download MP4{clip.file_size_bytes ? ` (${(clip.file_size_bytes / 1e6).toFixed(1)} MB)` : ''}
+            </a>
+            <a
+              href={clipFileUrl(clip.id, 'subtitles')}
+              className="rounded-md border border-slate-700 px-2.5 py-1 text-xs hover:border-slate-500"
+            >
+              ⬇ Subtitles (.srt)
+            </a>
+          </>
+        ) : (
+          <button
+            onClick={() => setPreview((p) => !p)}
+            className="rounded-md bg-rose-500 px-3 py-1 text-xs font-semibold hover:bg-rose-400"
+          >
+            {preview ? 'Hide preview' : '▶ Preview on YouTube'}
+          </button>
+        )}
         <button
           onClick={() => setDetails((d) => !d)}
           className="rounded-md border border-slate-700 px-2.5 py-1 text-xs hover:border-slate-500"
@@ -112,9 +153,13 @@ function ClipCard({ clip, videoId }) {
           <blockquote className="border-l-2 border-slate-700 pl-3 text-sm italic text-slate-400">
             {clip.transcript_text}
           </blockquote>
-          <p className="text-xs text-slate-500">Sentences S{clip.first_sentence}–S{clip.last_sentence}</p>
+          <p className="text-xs text-slate-500">
+            Sentences S{clip.first_sentence}–S{clip.last_sentence}
+            {clip.layout && ` · Framing: ${clip.layout === 'track' ? 'follows the speaker' : 'full frame on blurred background'}`}
+          </p>
         </div>
       )}
+      </div>
     </li>
   )
 }
@@ -142,7 +187,7 @@ export default function ClipsPanel({ jobId, videoId }) {
     <section>
       <h2 className="text-lg font-semibold">Highlights <span className="text-slate-500">({state.clips.length})</span></h2>
       <p className="mt-1 text-sm text-slate-400">
-        Chosen by AI, ranked by viral potential. Preview plays the moment from YouTube; vertical clip files are rendered in the next phase.
+        Chosen by AI, ranked by viral potential. Vertical 1080×1920 clips with captions, ready to post.
       </p>
       <ul className="mt-4 grid gap-4 lg:grid-cols-2">
         {state.clips.map((clip) => <ClipCard key={clip.id} clip={clip} videoId={videoId} />)}

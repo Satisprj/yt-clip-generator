@@ -10,14 +10,15 @@ import logging
 import time
 from dataclasses import asdict
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.exceptions import InvalidInputError
+from app.core.exceptions import AppError, ExternalServiceError, InvalidInputError
 from app.models import Clip, Transcript
 from app.services import highlights, media, storage, transcription, youtube
+from app.services import render as render_service
 from app.services.llm import ClaudeCliClient
-from app.services.sentences import Sentence, split_sentences
+from app.services.sentences import Sentence, Word, split_sentences
 from app.worker.context import StageContext
 
 logger = logging.getLogger(__name__)
@@ -155,14 +156,84 @@ def analyze(ctx: StageContext) -> None:
                 result.candidates_found, len(result.clips))
 
 
+def _clip_files_exist(clips_dir, clip: Clip) -> bool:
+    return all(f and (clips_dir / f).is_file()
+               for f in (clip.video_file, clip.subtitle_file, clip.thumbnail_file))
+
+
+def clip_words(transcript: Transcript, clip: Clip) -> list[Word]:
+    """Transcript words inside the clip, with times relative to the clip start."""
+    sentences = transcript.sentences
+    first = sentences[clip.first_sentence]["first_word"]
+    last = sentences[clip.last_sentence]["last_word"]
+    return [
+        Word(start=round(w["start"] - clip.start_seconds, 3),
+             end=round(w["end"] - clip.start_seconds, 3), text=w["text"])
+        for w in transcript.words[first:last + 1]
+    ]
+
+
+def render(ctx: StageContext) -> None:
+    job = ctx.job
+    clips = list(ctx.db.scalars(select(Clip).where(Clip.job_id == job.id).order_by(Clip.rank)))
+    if not clips:
+        ctx.report(1.0, "No clips to render")
+        return
+
+    files = storage.job_files(job.id)
+    todo = [c for c in clips
+            if not (c.render_status == "ready" and _clip_files_exist(files.clips_dir, c))]
+    if not todo:
+        ctx.report(1.0, "Using the previously rendered clips")
+        return
+
+    transcript = ctx.db.scalar(select(Transcript).where(Transcript.job_id == job.id))
+    if transcript is None:
+        raise InvalidInputError("This job has no transcript, so captions can't be made.")
+
+    for i, clip in enumerate(todo):
+        label = f"clip {i + 1} of {len(todo)}"
+
+        def progress(fraction: float, message: str, i: int = i, label: str = label) -> None:
+            ctx.report((i + fraction) / len(todo), f"Rendering {label}: {message.lower()}")
+
+        name = f"{clip.rank:02d}"
+        try:
+            result = render_service.render_clip(
+                files.source_video, start=clip.start_seconds, end=clip.end_seconds,
+                words=clip_words(transcript, clip), out_dir=files.clips_dir, name=name,
+                language=transcript.language, on_progress=progress,
+            )
+        except AppError as exc:
+            logger.warning("Job %s: rendering clip #%d failed: %s", job.id, clip.rank,
+                           exc.message)
+            clip.render_status, clip.render_error = "failed", exc.message
+            ctx.db.commit()
+            continue
+        clip.render_status, clip.render_error = "ready", None
+        clip.layout = result.layout
+        clip.video_file = result.video.name
+        clip.subtitle_file = result.subtitles.name
+        clip.thumbnail_file = result.thumbnail.name
+        clip.file_size_bytes = result.video.stat().st_size
+        ctx.db.commit()
+
+    failed = [c for c in clips if c.render_status != "ready"]
+    if len(failed) == len(clips):
+        raise ExternalServiceError(f"Rendering failed for every clip: {failed[0].render_error}")
+
+
 def completion_message(db, job) -> str:
     """Summary shown when a job finishes."""
-    count = db.scalar(select(func.count()).select_from(Clip).where(Clip.job_id == job.id)) or 0
-    if count == 0:
+    clips = list(db.scalars(select(Clip).where(Clip.job_id == job.id)))
+    if not clips:
         return ("No moments in this video work as standalone "
                 f"{get_settings().clip_min_seconds}-{get_settings().clip_max_seconds} s clips.")
-    noun = "clip" if count == 1 else "clips"
-    return f"{count} {noun} selected. Rendering vertical videos is added in the next phase."
+    ready = sum(c.render_status == "ready" for c in clips)
+    message = f"{ready} {'clip' if ready == 1 else 'clips'} ready to preview and download."
+    if ready < len(clips):
+        message += f" {len(clips) - ready} could not be rendered; Retry to try again."
+    return message
 
 
 def _human_duration(seconds: float) -> str:

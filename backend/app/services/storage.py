@@ -22,6 +22,10 @@ class JobFiles:
         return self.dir / "audio.wav"
 
     @property
+    def clips_dir(self) -> Path:
+        return self.dir / "clips"
+
+    @property
     def highlights(self) -> Path:
         """Raw AI responses, kept for debugging and re-ranking."""
         return self.dir / "highlights.json"

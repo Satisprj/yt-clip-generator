@@ -28,8 +28,9 @@ def enqueued(monkeypatch):
 
 
 @pytest.fixture
-def fake_youtube(monkeypatch, sample_video):
-    """Replace network calls: metadata returns INFO, download copies a real sample video."""
+def fake_youtube(monkeypatch, long_video):
+    """Replace network/AI calls: metadata returns INFO, download copies a real 110 s video,
+    transcription returns `words`, Claude returns `moments`. Rendering is real (FFmpeg)."""
     calls = {"download": 0}
 
     def fake_download(url, destination, *, on_progress=None, check_space=None):
@@ -39,7 +40,7 @@ def fake_youtube(monkeypatch, sample_video):
         if on_progress:
             on_progress(0.5, "Downloading video: 50%")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(sample_video, destination)
+        shutil.copy(long_video, destination)
         return destination
 
     def fake_transcribe(audio_path, *, duration_seconds=None, on_progress=None):
@@ -370,7 +371,7 @@ def test_pipeline_selects_and_stores_clips(db, storage_dir, fake_youtube):
     assert first.transcript_text.startswith("word0")
     assert fake_youtube["llm"] == 2  # moments + metadata
     assert storage.job_files(job.id).highlights.is_file()
-    assert _reload(db, job).stage_message.startswith("2 clips selected")
+    assert _reload(db, job).stage_message.startswith("2 clips ready")
 
 
 def test_retry_reuses_selected_clips(db, storage_dir, fake_youtube):
@@ -425,3 +426,116 @@ def test_clips_api(client, db, storage_dir, fake_youtube):
     assert clips[0]["rank"] == 1 and clips[0]["title"] == "Clip 0"
     assert set(clips[0]["scores"]) == set(SCORES)
     assert client.get(f"/api/jobs/{uuid.uuid4()}/clips").status_code == 404
+
+
+# --- Rendering ---------------------------------------------------------------
+
+
+def test_pipeline_renders_clips(db, storage_dir, fake_youtube):
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3), _moment(7, 9, "funny")]
+    job = _queued_job(db)
+
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    clips_dir = storage.job_files(job.id).clips_dir
+    clips = db.query(Clip).filter_by(job_id=job.id).order_by(Clip.rank).all()
+    for clip in clips:
+        assert clip.render_status == "ready" and clip.render_error is None
+        assert clip.layout == "fit"
+        assert (clips_dir / clip.video_file).stat().st_size == clip.file_size_bytes
+        assert (clips_dir / clip.thumbnail_file).is_file()
+        srt = (clips_dir / clip.subtitle_file).read_text(encoding="utf-8")
+        assert srt.startswith("1\n00:00:00,")  # captions relative to the clip start
+    assert [c.video_file for c in clips] == ["01.mp4", "02.mp4"]
+    assert _reload(db, job).stage_message == "2 clips ready to preview and download."
+
+
+def test_rendering_failure_of_one_clip_keeps_the_others(db, storage_dir, fake_youtube,
+                                                         monkeypatch):
+    from app.services import render as render_service
+    from app.services.media import MediaError
+
+    real = render_service.render_clip
+
+    def flaky(source, **kwargs):
+        if kwargs["name"] == "02":
+            raise MediaError("FFmpeg failed (exit code 1): boom")
+        return real(source, **kwargs)
+
+    monkeypatch.setattr(render_service, "render_clip", flaky)
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3), _moment(7, 9, "funny")]
+    job = _queued_job(db)
+
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    statuses = [(c.rank, c.render_status) for c in
+                db.query(Clip).filter_by(job_id=job.id).order_by(Clip.rank)]
+    assert statuses == [(1, "ready"), (2, "failed")]
+    assert "1 could not be rendered" in _reload(db, job).stage_message
+
+    # Retry renders only the failed clip.
+    monkeypatch.setattr(render_service, "render_clip", real)
+    job = _reload(db, job)
+    job.status = JobStatus.FAILED
+    db.commit()
+    job.status = JobStatus.QUEUED
+    db.commit()
+    first_mtime = (storage.job_files(job.id).clips_dir / "01.mp4").stat().st_mtime_ns
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert (storage.job_files(job.id).clips_dir / "01.mp4").stat().st_mtime_ns == first_mtime
+    assert all(c.render_status == "ready" for c in db.query(Clip).filter_by(job_id=job.id))
+
+
+def test_job_fails_when_every_clip_fails_to_render(db, storage_dir, fake_youtube, monkeypatch):
+    from app.services import render as render_service
+    from app.services.media import MediaError
+
+    def broken(source, **kwargs):
+        raise MediaError("FFmpeg failed (exit code 1): no encoder")
+
+    monkeypatch.setattr(render_service, "render_clip", broken)
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3)]
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
+    assert "Rendering failed for every clip" in _reload(db, job).error_message
+
+
+def test_clip_file_endpoints(client, db, storage_dir, fake_youtube):
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3)]
+    job = _queued_job(db)
+    pipeline.run_pipeline(job.id)
+    clip = client.get(f"/api/jobs/{job.id}/clips").json()[0]
+    assert clip["render_status"] == "ready" and clip["layout"] == "fit"
+
+    base = f"/api/clips/{clip['id']}"
+    video = client.get(f"{base}/video")
+    assert video.status_code == 200 and video.headers["content-type"] == "video/mp4"
+    assert "content-disposition" not in video.headers  # inline, for the player
+    assert len(video.content) == clip["file_size_bytes"]
+
+    partial = client.get(f"{base}/video", headers={"Range": "bytes=0-99"})
+    assert partial.status_code == 206 and len(partial.content) == 100  # seeking works
+
+    download = client.get(f"{base}/video", params={"download": "true"})
+    assert 'filename="01-Clip-0.mp4"' in download.headers["content-disposition"]
+    assert client.get(f"{base}/thumbnail").headers["content-type"] == "image/jpeg"
+    srt = client.get(f"{base}/subtitles")
+    assert srt.text.startswith("1\r\n00:00:00,")  # CRLF: what SRT players expect
+    assert ".srt" in srt.headers["content-disposition"]
+
+    assert client.get(f"/api/clips/{uuid.uuid4()}/video").status_code == 404
+
+
+def test_clip_files_not_available_before_rendering(client, db):
+    job = _queued_job(db)
+    clip = Clip(job_id=job.id, rank=1, start_seconds=0, end_seconds=25, duration_seconds=25,
+                first_sentence=0, last_sentence=2, transcript_text="t", category="story",
+                viral_score=7, scores={}, hook="h", reason="r", title="T", description="",
+                hashtags=[])
+    db.add(clip)
+    db.commit()
+    response = client.get(f"/api/clips/{clip.id}/video")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "clip_not_rendered"
