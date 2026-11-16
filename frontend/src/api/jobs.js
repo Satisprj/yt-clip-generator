@@ -22,6 +22,26 @@ export function listClips(jobId, signal) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}/clips`, { signal })
 }
 
+export function clipsZipUrl(jobId) {
+  return `${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/clips.zip`
+}
+
+export function deleteJob(jobId) {
+  return apiRequest(`/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' })
+}
+
+/** startFrom: "highlights" (new AI picks) or "render" (re-render the same clips). */
+export function reprocessJob(jobId, startFrom) {
+  return apiRequest(`/jobs/${encodeURIComponent(jobId)}/reprocess`, {
+    method: 'POST',
+    body: { start_from: startFrom },
+  })
+}
+
+export function freeSpace(jobId) {
+  return apiRequest(`/jobs/${encodeURIComponent(jobId)}/free-space`, { method: 'POST' })
+}
+
 export function retryJob(jobId) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' })
 }

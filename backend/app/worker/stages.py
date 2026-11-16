@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 def fetch_info(ctx: StageContext) -> None:
     job = ctx.job
+    if job.title and job.duration_seconds:
+        # Retry/reprocess: details are known, so skip the slow YouTube lookup but still
+        # apply the current limits (e.g. a changed MAX_VIDEO_DURATION_SECONDS).
+        youtube.validate_for_processing(youtube.VideoInfo(
+            job.youtube_video_id, job.title, job.channel, job.duration_seconds,
+            job.thumbnail_url, is_live=False))
+        ctx.report(1.0, "Using the saved video information")
+        return
     info = youtube.fetch_video_info(job.youtube_url)
     job.title = info.title
     job.channel = info.channel

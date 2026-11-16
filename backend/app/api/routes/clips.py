@@ -1,6 +1,5 @@
 """Rendered clip files: video (streamable, with HTTP range support), thumbnail, subtitles."""
 
-import re
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +12,7 @@ from app.core.exceptions import NotFoundError
 from app.db.session import get_db
 from app.models import Clip
 from app.services import storage
+from app.services.export import clip_basename
 
 router = APIRouter(prefix="/clips", tags=["clips"])
 
@@ -34,9 +34,7 @@ def _clip_file(db: Session, clip_id: uuid.UUID, attribute: str) -> tuple[Clip, P
 
 
 def download_name(clip: Clip, extension: str) -> str:
-    slug = re.sub(r"[^\w\s-]", "", clip.title, flags=re.UNICODE).strip()
-    slug = re.sub(r"[\s_]+", "-", slug)[:60].strip("-") or "clip"
-    return f"{clip.rank:02d}-{slug}.{extension}"
+    return f"{clip_basename(clip)}.{extension}"
 
 
 @router.get("/{clip_id}/video")

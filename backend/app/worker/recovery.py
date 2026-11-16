@@ -35,6 +35,7 @@ def fail_interrupted_jobs() -> int:
             update(Job)
             .where(Job.status.in_(RUNNING_STATUSES))
             .values(
+                failed_stage=Job.status,  # the stage it was in (evaluated before the update)
                 status=JobStatus.FAILED,
                 error_message=INTERRUPTED_MESSAGE,
                 stage_message=None,

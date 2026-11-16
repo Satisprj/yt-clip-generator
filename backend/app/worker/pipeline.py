@@ -77,11 +77,12 @@ def run_pipeline(job_id: uuid.UUID) -> JobStatus | None:
 
         except AppError as exc:
             logger.warning("Job %s failed at %s: %s", job_id, _name(current), exc.message)
-            return _mark_failed(db, job_id, exc.message)
+            return _mark_failed(db, job_id, exc.message, current)
         except Exception:
             logger.exception("Job %s crashed at %s", job_id, _name(current))
             return _mark_failed(
-                db, job_id, f"Unexpected error while {_name(current)}. See the worker log."
+                db, job_id, f"Unexpected error while {_name(current)}. See the worker log.",
+                current,
             )
 
 
@@ -89,13 +90,15 @@ def _name(stage: Stage | None) -> str:
     return stage.message.lower() if stage else "starting"
 
 
-def _mark_failed(db: Session, job_id: uuid.UUID, message: str) -> JobStatus:
+def _mark_failed(db: Session, job_id: uuid.UUID, message: str,
+                 stage: Stage | None) -> JobStatus:
     db.rollback()
     job = db.get(Job, job_id)
     if job is None:
         return JobStatus.FAILED
     job.status = JobStatus.FAILED
     job.error_message = message
+    job.failed_stage = stage.status.value if stage else None
     job.stage_message = None
     job.completed_at = utcnow()
     db.commit()

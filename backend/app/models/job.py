@@ -55,6 +55,8 @@ class Job(Base):
     progress: Mapped[int] = mapped_column(SmallInteger, default=0)
     stage_message: Mapped[str | None] = mapped_column(String(500))
     error_message: Mapped[str | None] = mapped_column(Text)
+    # The stage a failed job was in (e.g. "downloading"); cleared when it runs again.
+    failed_stage: Mapped[str | None] = mapped_column(String(32))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True

@@ -303,3 +303,24 @@ others continue; the job fails only if every clip fails. Retry renders only clip
 
 Files are served by `GET /api/clips/{id}/video` (HTTP range requests for seeking;
 `?download=true` for an attachment named after the title), `/thumbnail` and `/subtitles`.
+
+## 15. Job management and UI (Phase 6)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| DELETE | `/api/jobs/{id}` | Delete a finished job: files first (a locked file returns 409 and nothing is lost), then rows (transcript and clips cascade) |
+| POST | `/api/jobs/{id}/reprocess` | `{"start_from": "highlights"}` drops the clips and asks Claude again; `"render"` re-renders the same clips. Download and transcript are reused |
+| POST | `/api/jobs/{id}/free-space` | Delete `source.mp4` and `audio.wav` (and partial downloads), keep clips. A later reprocess downloads the video again automatically |
+| GET | `/api/jobs/{id}/clips.zip` | All ready clips, `.srt` files and `captions.txt` (titles, descriptions, hashtags). Built in a temp file, deleted after sending |
+
+All of these require a finished job (409 while running). Jobs include `clip_count`,
+`ready_clip_count`, `storage_bytes`, `has_source_files` and `failed_stage` (the stage a failed
+job was in, also recorded for interrupted jobs); `GET /api/jobs` adds `storage_bytes_total`.
+
+On retry or reprocess, the info stage reuses the saved title and duration (no YouTube call)
+but still applies the current limits.
+
+UI: the job page has a stage stepper, an actions bar (Retry, Download all as ZIP, New
+highlights, Re-render, Free up space, Delete) and clip cards that appear while clips are
+rendering. Each card has a vertical player and download buttons. History shows clip count
+and disk use per job, total disk use, delete, and refreshes itself while jobs are running.

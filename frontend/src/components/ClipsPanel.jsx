@@ -164,20 +164,26 @@ function ClipCard({ clip, videoId }) {
   )
 }
 
-/** Highlights chosen for a job, best first. */
-export default function ClipsPanel({ jobId, videoId }) {
+/** Highlights chosen for a job, best first. `refreshKey` changes when the list should reload. */
+export default function ClipsPanel({ jobId, videoId, refreshKey }) {
   const [state, setState] = useState({ clips: null, error: null })
 
+  // Start empty for a new job...
+  useEffect(() => {
+    setState({ clips: null, error: null })
+  }, [jobId])
+
+  // ...but on refreshes (a clip finished rendering) keep showing the current list until the
+  // new one arrives, so playing videos aren't interrupted by a "Loading" flash.
   useEffect(() => {
     const controller = new AbortController()
-    setState({ clips: null, error: null })
     listClips(jobId, controller.signal)
       .then((clips) => setState({ clips, error: null }))
       .catch((err) => {
-        if (err.name !== 'AbortError') setState({ clips: null, error: err })
+        if (err.name !== 'AbortError') setState((prev) => ({ ...prev, error: err }))
       })
     return () => controller.abort()
-  }, [jobId])
+  }, [jobId, refreshKey])
 
   if (state.error) return <p className="text-sm text-rose-300">Could not load clips: {state.error.message}</p>
   if (!state.clips) return <p className="text-sm text-slate-400">Loading clips…</p>

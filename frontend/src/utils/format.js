@@ -28,6 +28,14 @@ export function formatRelativeTime(iso) {
   return 'just now'
 }
 
+/** 1536000 -> "1.5 MB" */
+export function formatBytes(bytes) {
+  if (!bytes) return '0 MB'
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(bytes >= 1e8 ? 0 : 1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`
+}
+
 export function formatDateTime(iso) {
   return iso ? new Date(iso).toLocaleString() : ''
 }
