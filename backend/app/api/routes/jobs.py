@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.schemas.clip import ClipRead
 from app.schemas.job import JobCreate, JobList, JobRead
 from app.schemas.transcript import TranscriptRead
 from app.services import jobs as job_service
@@ -52,6 +53,12 @@ def get_transcript(
         sentence_count=t.sentence_count, sentences=t.sentences,
         words=t.words if include_words else None, created_at=t.created_at,
     )
+
+
+@router.get("/{job_id}/clips", response_model=list[ClipRead])
+def list_clips(job_id: uuid.UUID, db: DbSession) -> list[ClipRead]:
+    """Selected highlights, best first. Empty until the analysis stage has finished."""
+    return [ClipRead.model_validate(c) for c in job_service.list_clips(db, job_id)]
 
 
 @router.post("/{job_id}/retry", response_model=JobRead)

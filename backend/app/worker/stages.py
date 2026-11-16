@@ -5,17 +5,19 @@ Stages are idempotent: if their output already exists (e.g. after a retry), they
 the work, so a failed job resumes where it stopped.
 """
 
+import json
 import logging
 import time
 from dataclasses import asdict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.exceptions import InvalidInputError
-from app.models import Transcript
-from app.services import media, storage, transcription, youtube
-from app.services.sentences import split_sentences
+from app.models import Clip, Transcript
+from app.services import highlights, media, storage, transcription, youtube
+from app.services.llm import ClaudeCliClient
+from app.services.sentences import Sentence, split_sentences
 from app.worker.context import StageContext
 
 logger = logging.getLogger(__name__)
@@ -101,6 +103,66 @@ def transcribe(ctx: StageContext) -> None:
     ctx.db.commit()
     logger.info("Job %s: %d words, %d sentences, language=%s", job.id, len(result.words),
                 len(sentences), result.language)
+
+
+def analyze(ctx: StageContext) -> None:
+    job = ctx.job
+    if ctx.db.scalar(select(Clip.id).where(Clip.job_id == job.id).limit(1)) is not None:
+        ctx.report(1.0, "Using the previously selected highlights")
+        return
+
+    transcript = ctx.db.scalar(select(Transcript).where(Transcript.job_id == job.id))
+    if transcript is None:
+        raise InvalidInputError("This job has no transcript to analyze.")
+    sentences = [Sentence(**s) for s in transcript.sentences]
+    video = highlights.VideoContext(
+        title=job.title or "Untitled video",
+        channel=job.channel,
+        duration_seconds=float(job.duration_seconds or transcript.duration_seconds),
+        language=transcript.language,
+    )
+
+    result = highlights.detect_highlights(ClaudeCliClient(), video, sentences,
+                                          on_step=ctx.report)
+
+    files = storage.job_files(job.id)
+    files.dir.mkdir(parents=True, exist_ok=True)
+    files.highlights.write_text(json.dumps(
+        {"candidates": result.raw_candidates, "metadata": result.raw_metadata},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+
+    for clip in result.clips:
+        ctx.db.add(Clip(
+            job_id=job.id,
+            rank=clip.rank,
+            start_seconds=clip.window.start,
+            end_seconds=clip.window.end,
+            duration_seconds=round(clip.window.duration, 3),
+            first_sentence=clip.window.first_sentence,
+            last_sentence=clip.window.last_sentence,
+            transcript_text=clip.text,
+            category=clip.candidate.category,
+            viral_score=clip.viral_score,
+            scores=clip.candidate.scores,
+            hook=clip.candidate.hook,
+            reason=clip.candidate.reason,
+            title=clip.title,
+            description=clip.description,
+            hashtags=clip.hashtags,
+        ))
+    ctx.db.commit()
+    logger.info("Job %s: %d moments suggested, %d clips selected", job.id,
+                result.candidates_found, len(result.clips))
+
+
+def completion_message(db, job) -> str:
+    """Summary shown when a job finishes."""
+    count = db.scalar(select(func.count()).select_from(Clip).where(Clip.job_id == job.id)) or 0
+    if count == 0:
+        return ("No moments in this video work as standalone "
+                f"{get_settings().clip_min_seconds}-{get_settings().clip_max_seconds} s clips.")
+    noun = "clip" if count == 1 else "clips"
+    return f"{count} {noun} selected. Rendering vertical videos is added in the next phase."
 
 
 def _human_duration(seconds: float) -> str:

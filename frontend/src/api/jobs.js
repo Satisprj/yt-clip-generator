@@ -12,6 +12,10 @@ export function getTranscript(jobId, signal) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}/transcript`, { signal })
 }
 
+export function listClips(jobId, signal) {
+  return apiRequest(`/jobs/${encodeURIComponent(jobId)}/clips`, { signal })
+}
+
 export function retryJob(jobId) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' })
 }

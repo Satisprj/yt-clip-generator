@@ -4,11 +4,11 @@ import uuid
 import pytest
 
 from app.core.exceptions import ExternalServiceError, InvalidInputError, ServiceUnavailableError
-from app.models import Job, JobStatus, Transcript
+from app.models import Clip, Job, JobStatus, Transcript
 from app.services import storage, transcription, youtube
 from app.services.sentences import Word
 from app.services.youtube import VideoInfo
-from app.worker import pipeline, tasks
+from app.worker import pipeline, stages, tasks
 from app.worker.context import StageContext
 
 ID = "jNQXAC9IVRw"
@@ -49,15 +49,38 @@ def fake_youtube(monkeypatch, sample_video):
             on_progress(0.5)
         return transcription.TranscriptionResult(
             language="en", language_probability=0.99, duration_seconds=3.0, model="fake",
-            words=list(WORDS),
+            words=list(calls["words"]),
         )
 
-    calls["transcribe"] = 0
+    class FakeClaude:
+        def generate_json(self, *, system, prompt, schema, model=None, effort=None):
+            calls["llm"] += 1
+            if calls["llm_error"]:
+                raise calls["llm_error"]
+            if "moments" in schema["properties"]:
+                return {"moments": calls["moments"]}
+            return {"clips": [{"index": i, "title": f"Clip {i}", "description": "d",
+                               "hashtags": ["tag"]} for i in range(10)]}
+
+    calls.update(transcribe=0, llm=0, llm_error=None, words=list(WORDS), moments=[])
     monkeypatch.setattr(youtube, "fetch_video_info", lambda url: INFO)
     monkeypatch.setattr(youtube, "download_video", fake_download)
     monkeypatch.setattr(transcription, "get_model", lambda: None)
     monkeypatch.setattr(transcription, "transcribe", fake_transcribe)
+    monkeypatch.setattr(stages, "ClaudeCliClient", FakeClaude)
     return calls
+
+
+def long_speech(sentence_count=12, words_per_sentence=10, word_seconds=0.8):
+    """Words forming sentences of ~8 s each, so 3 sentences make a 20-30 s clip."""
+    words, t = [], 0.0
+    for s in range(sentence_count):
+        for w in range(words_per_sentence):
+            text = f" Point{s}." if w == words_per_sentence - 1 else f" word{w}"
+            words.append(Word(round(t, 3), round(t + word_seconds - 0.1, 3), text, 0.9))
+            t += word_seconds
+        t += 0.4
+    return words
 
 
 # --- API -------------------------------------------------------------------
@@ -319,3 +342,86 @@ def test_transcript_api(client, db, storage_dir, fake_youtube):
     with_words = client.get(f"/api/jobs/{job.id}/transcript",
                             params={"include_words": "true"}).json()
     assert len(with_words["words"]) == 5
+
+
+# --- Highlight detection ---------------------------------------------------
+
+SCORES = {"hook": 9, "standalone": 8, "payoff": 8, "emotion": 7, "shareability": 8}
+
+
+def _moment(a, b, category="educational", scores=SCORES):
+    return {"start_sentence": a, "end_sentence": b, "category": category, "hook": f"Hook {a}",
+            "reason": "Good", "scores": scores}
+
+
+def test_pipeline_selects_and_stores_clips(db, storage_dir, fake_youtube):
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3), _moment(7, 9, "funny", {k: 5 for k in SCORES})]
+    job = _queued_job(db)
+
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    clips = db.query(Clip).filter_by(job_id=job.id).order_by(Clip.rank).all()
+    assert [(c.rank, c.first_sentence, c.last_sentence) for c in clips] == [(1, 1, 3), (2, 7, 9)]
+    first = clips[0]
+    assert 20 <= first.duration_seconds <= 30
+    assert first.end_seconds - first.start_seconds == pytest.approx(first.duration_seconds)
+    assert (first.title, first.hashtags, first.category) == ("Clip 0", ["#tag"], "educational")
+    assert first.viral_score > clips[1].viral_score
+    assert first.transcript_text.startswith("word0")
+    assert fake_youtube["llm"] == 2  # moments + metadata
+    assert storage.job_files(job.id).highlights.is_file()
+    assert _reload(db, job).stage_message.startswith("2 clips selected")
+
+
+def test_retry_reuses_selected_clips(db, storage_dir, fake_youtube):
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3)]
+    job = _queued_job(db)
+    pipeline.run_pipeline(job.id)
+    job = _reload(db, job)
+    job.status = JobStatus.QUEUED
+    db.commit()
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert fake_youtube["llm"] == 2  # no new Claude calls
+    assert db.query(Clip).filter_by(job_id=job.id).count() == 1
+
+
+def test_no_usable_moments_completes_with_message(db, storage_dir, fake_youtube):
+    job = _queued_job(db)  # default transcript is ~3 s long: nothing fits 20-30 s
+    fake_youtube["moments"] = [_moment(0, 1)]
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert _reload(db, job).stage_message.startswith("No moments")
+    assert db.query(Clip).count() == 0
+
+
+def test_claude_failure_fails_job_and_retry_resumes(db, storage_dir, fake_youtube):
+    from app.services.llm import LLMError
+
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3)]
+    fake_youtube["llm_error"] = LLMError("Claude CLI returned an error: usage limit reached")
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
+    assert "usage limit" in _reload(db, job).error_message
+
+    fake_youtube["llm_error"] = None
+    job = _reload(db, job)
+    job.status = JobStatus.QUEUED
+    db.commit()
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert fake_youtube["transcribe"] == 1  # transcript was reused
+    assert db.query(Clip).filter_by(job_id=job.id).count() == 1
+
+
+def test_clips_api(client, db, storage_dir, fake_youtube):
+    fake_youtube["words"] = long_speech()
+    fake_youtube["moments"] = [_moment(1, 3)]
+    job = _queued_job(db)
+    assert client.get(f"/api/jobs/{job.id}/clips").json() == []
+    pipeline.run_pipeline(job.id)
+
+    clips = client.get(f"/api/jobs/{job.id}/clips").json()
+    assert len(clips) == 1
+    assert clips[0]["rank"] == 1 and clips[0]["title"] == "Clip 0"
+    assert set(clips[0]["scores"]) == set(SCORES)
+    assert client.get(f"/api/jobs/{uuid.uuid4()}/clips").status_code == 404

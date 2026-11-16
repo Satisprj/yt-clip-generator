@@ -33,10 +33,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(JobStatus.DOWNLOADING, "Downloading video", stages.download, 30),
     Stage(JobStatus.EXTRACTING_AUDIO, "Extracting audio", stages.extract_audio, 5),
     Stage(JobStatus.TRANSCRIBING, "Transcribing speech", stages.transcribe, 40),
-)
-
-COMPLETED_MESSAGE = (
-    "Transcript ready. Highlight detection and clip generation are added in later phases."
+    Stage(JobStatus.ANALYZING, "Finding highlights", stages.analyze, 10),
 )
 
 
@@ -71,7 +68,7 @@ def run_pipeline(job_id: uuid.UUID) -> JobStatus | None:
 
             job.status = JobStatus.COMPLETED
             job.progress = 100
-            job.stage_message = COMPLETED_MESSAGE
+            job.stage_message = stages.completion_message(db, job)
             job.completed_at = utcnow()
             db.commit()
             logger.info("Job %s completed", job_id)

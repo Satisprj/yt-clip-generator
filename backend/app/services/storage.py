@@ -21,6 +21,11 @@ class JobFiles:
     def audio(self) -> Path:
         return self.dir / "audio.wav"
 
+    @property
+    def highlights(self) -> Path:
+        """Raw AI responses, kept for debugging and re-ranking."""
+        return self.dir / "highlights.json"
+
 
 def job_files(job_id: uuid.UUID) -> JobFiles:
     return JobFiles(get_settings().jobs_dir / str(job_id))

@@ -244,3 +244,33 @@ subscription login is always used.
 - Speech over loud music: if VAD keeps no words, transcription is repeated without VAD.
 - Speed on this laptop's CPU (`small`, int8, greedy decoding): about 1x real time.
 - `GET /api/jobs/{id}/transcript` returns sentences (`?include_words=true` adds words).
+
+## 13. Highlight detection (Phase 4)
+
+Two Claude calls per video through `claude -p` (`services/highlights.py`):
+
+1. **Moments** (`CLAUDE_MODEL`, Opus): the prompt holds the video title and the transcript
+   as `[S<id> <mm:ss> <duration>] text` lines, wrapped in `<transcript>` and marked as data
+   (instructions spoken in a video are ignored). The JSON schema asks for sentence-ID ranges,
+   a category and five rubric scores (hook, standalone, payoff, emotion, shareability), for
+   up to `clamp(1.5 × minutes, 3, 2 × MAX_CLIPS_PER_VIDEO)` moments.
+2. **Titles** (`CLAUDE_FAST_MODEL`, Haiku): one call for all selected clips: title,
+   description and hashtags in the transcript's language. Missing entries fall back to the hook.
+
+Between the two calls, pure code (`services/clip_selection.py`) decides the final clips:
+
+- **Fitting**: each range is adjusted to `CLIP_MIN_SECONDS`–`CLIP_MAX_SECONDS` by
+  adding or removing whole sentences (never mid-sentence). Moving the start later costs more
+  than adding context before it; starting on a context-dependent word ("And…", "That's
+  why…") is penalised; the fitted clip must keep at least half of the chosen sentences. If
+  nothing fits exactly, up to 2 s shorter or 4 s longer is accepted; otherwise the moment is
+  dropped. Padding (0.15 s before, 0.35 s after) never reaches into neighbouring sentences.
+- **Scoring**: weighted rubric (hook 30%, standalone 25%, payoff 20%, emotion 15%,
+  shareability 10%), minus 0.5 for a dangling start.
+- **Selection**: best first; drop clips overlapping a better one by more than 30%; a soft
+  per-category cap gives variety, then remaining slots are filled; ranked by score.
+
+Raw AI responses are saved to `storage/jobs/<id>/highlights.json`. Clips are stored in the
+`clips` table and served by `GET /api/jobs/{id}/clips`. Measured: about 35–45 s for both
+calls on a 3.5-minute video. A Claude error (e.g. a usage limit) fails the job; Retry reuses
+the download and transcript.

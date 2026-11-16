@@ -12,7 +12,7 @@ from app.core.exceptions import (
     NotFoundError,
     ServiceUnavailableError,
 )
-from app.models import Job, JobStatus, Transcript
+from app.models import Clip, Job, JobStatus, Transcript
 from app.models.job import utcnow
 from app.services.youtube import canonical_url, extract_video_id
 
@@ -82,6 +82,11 @@ def get_transcript(db: Session, job_id: uuid.UUID) -> Transcript:
     if transcript is None:
         raise NotFoundError("This job has no transcript yet.", code="transcript_not_ready")
     return transcript
+
+
+def list_clips(db: Session, job_id: uuid.UUID) -> list[Clip]:
+    get_job(db, job_id)  # 404 if the job doesn't exist
+    return list(db.scalars(select(Clip).where(Clip.job_id == job_id).order_by(Clip.rank)))
 
 
 def list_jobs(db: Session, *, limit: int, offset: int) -> tuple[list[Job], int]:

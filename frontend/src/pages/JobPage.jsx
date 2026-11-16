@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { retryJob } from '../api/jobs.js'
 import ProgressBar from '../components/ProgressBar.jsx'
+import ClipsPanel from '../components/ClipsPanel.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
 import TranscriptPanel from '../components/TranscriptPanel.jsx'
 import VideoThumbnail from '../components/VideoThumbnail.jsx'
@@ -68,7 +69,7 @@ export default function JobPage() {
   const failed = job.status === 'failed'
 
   return (
-    <section className="mx-auto max-w-3xl">
+    <section className="mx-auto max-w-5xl">
       <Link to="/history" className="text-sm text-slate-400 hover:text-white">← History</Link>
 
       <div className="mt-4 grid gap-6 sm:grid-cols-[280px_1fr]">
@@ -114,9 +115,14 @@ export default function JobPage() {
 
       {/* Loaded once the job stops running; a job that failed later on still has one. */}
       {(job.status === 'completed' || job.status === 'failed') && (
-        <div className="mt-8">
-          <TranscriptPanel key={job.updated_at} jobId={job.id} youtubeUrl={job.youtube_url} />
-        </div>
+        <>
+          <div className="mt-8">
+            <ClipsPanel key={`clips-${job.updated_at}`} jobId={job.id} videoId={job.youtube_video_id} />
+          </div>
+          <div className="mt-8">
+            <TranscriptPanel key={job.updated_at} jobId={job.id} youtubeUrl={job.youtube_url} />
+          </div>
+        </>
       )}
     </section>
   )
