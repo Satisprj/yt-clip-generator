@@ -4,14 +4,19 @@ import uuid
 import pytest
 
 from app.core.exceptions import ExternalServiceError, InvalidInputError, ServiceUnavailableError
-from app.models import Job, JobStatus
-from app.services import storage, youtube
+from app.models import Job, JobStatus, Transcript
+from app.services import storage, transcription, youtube
+from app.services.sentences import Word
 from app.services.youtube import VideoInfo
 from app.worker import pipeline, tasks
 from app.worker.context import StageContext
 
 ID = "jNQXAC9IVRw"
 INFO = VideoInfo(ID, "Me at the zoo", "jawed", 600, "https://i.ytimg.com/x.jpg", False)
+WORDS = (
+    Word(0.0, 0.4, " Hello", 0.9), Word(0.5, 0.9, " everyone.", 0.95),
+    Word(1.2, 1.5, " This", 0.9), Word(1.6, 1.9, " is", 0.9), Word(2.0, 2.6, " great!", 0.8),
+)
 
 
 @pytest.fixture
@@ -37,8 +42,21 @@ def fake_youtube(monkeypatch, sample_video):
         shutil.copy(sample_video, destination)
         return destination
 
+    def fake_transcribe(audio_path, *, duration_seconds=None, on_progress=None):
+        calls["transcribe"] += 1
+        assert audio_path.is_file()  # the real extracted audio is passed in
+        if on_progress:
+            on_progress(0.5)
+        return transcription.TranscriptionResult(
+            language="en", language_probability=0.99, duration_seconds=3.0, model="fake",
+            words=list(WORDS),
+        )
+
+    calls["transcribe"] = 0
     monkeypatch.setattr(youtube, "fetch_video_info", lambda url: INFO)
     monkeypatch.setattr(youtube, "download_video", fake_download)
+    monkeypatch.setattr(transcription, "get_model", lambda: None)
+    monkeypatch.setattr(transcription, "transcribe", fake_transcribe)
     return calls
 
 
@@ -249,3 +267,55 @@ def test_stage_context_maps_and_throttles_progress(db):
     ctx.report(1.0, "done")       # completion is always saved
     assert (job.progress, job.stage_message) == (60, "done")
     assert _reload(db, job).progress == 60
+
+
+# --- Transcription ---------------------------------------------------------
+
+
+def test_pipeline_stores_transcript_and_sentences(db, storage_dir, fake_youtube):
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+
+    t = db.query(Transcript).filter_by(job_id=job.id).one()
+    assert (t.language, t.word_count, t.sentence_count, t.model) == ("en", 5, 2, "fake")
+    assert [s["text"] for s in t.sentences] == ["Hello everyone.", "This is great!"]
+    assert t.sentences[1] == {"id": 1, "start": 1.2, "end": 2.6, "text": "This is great!",
+                              "first_word": 2, "last_word": 4}
+    assert t.words[0] == {"start": 0.0, "end": 0.4, "text": " Hello", "probability": 0.9}
+
+
+def test_retry_reuses_existing_transcript(db, storage_dir, fake_youtube):
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    job = _reload(db, job)
+    job.status = JobStatus.QUEUED
+    db.commit()
+    assert pipeline.run_pipeline(job.id) == JobStatus.COMPLETED
+    assert fake_youtube["transcribe"] == 1
+    assert db.query(Transcript).filter_by(job_id=job.id).count() == 1
+
+
+def test_pipeline_fails_when_no_speech(db, storage_dir, fake_youtube, monkeypatch):
+    silent = transcription.TranscriptionResult("en", 0.5, 3.0, "fake", [])
+    monkeypatch.setattr(transcription, "transcribe", lambda *a, **k: silent)
+    job = _queued_job(db)
+    assert pipeline.run_pipeline(job.id) == JobStatus.FAILED
+    assert "No speech" in _reload(db, job).error_message
+    assert db.query(Transcript).count() == 0
+
+
+def test_transcript_api(client, db, storage_dir, fake_youtube):
+    job = _queued_job(db)
+    not_ready = client.get(f"/api/jobs/{job.id}/transcript")
+    assert not_ready.status_code == 404
+    assert not_ready.json()["error"]["code"] == "transcript_not_ready"
+    assert client.get(f"/api/jobs/{uuid.uuid4()}/transcript").json()["error"]["code"] == \
+        "not_found"
+
+    pipeline.run_pipeline(job.id)
+    body = client.get(f"/api/jobs/{job.id}/transcript").json()
+    assert body["sentence_count"] == 2 and "words" not in body
+    assert body["sentences"][0]["text"] == "Hello everyone."
+    with_words = client.get(f"/api/jobs/{job.id}/transcript",
+                            params={"include_words": "true"}).json()
+    assert len(with_words["words"]) == 5

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     whisper_model: str = "small"
     whisper_device: Literal["cpu", "cuda", "auto"] = "cpu"
     whisper_compute_type: str = "int8"
+    # None = auto-detect. Set e.g. "en" or "ne" to skip detection and avoid mistakes.
+    whisper_language: str | None = None
+    # 1 = greedy decoding (fastest on CPU); 5 = beam search (slightly more accurate, slower).
+    whisper_beam_size: int = Field(default=1, ge=1, le=10)
+    # 0 = let CTranslate2 decide.
+    whisper_cpu_threads: int = Field(default=0, ge=0)
 
     # --- Media tools ---
     ffmpeg_path: str = "ffmpeg"
@@ -65,7 +71,7 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
-    @field_validator("ytdlp_cookies_file", "js_runtime_path", mode="before")
+    @field_validator("ytdlp_cookies_file", "js_runtime_path", "whisper_language", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

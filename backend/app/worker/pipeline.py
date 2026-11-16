@@ -32,11 +32,11 @@ STAGES: tuple[Stage, ...] = (
     Stage(JobStatus.FETCHING_INFO, "Fetching video information", stages.fetch_info, 5),
     Stage(JobStatus.DOWNLOADING, "Downloading video", stages.download, 30),
     Stage(JobStatus.EXTRACTING_AUDIO, "Extracting audio", stages.extract_audio, 5),
+    Stage(JobStatus.TRANSCRIBING, "Transcribing speech", stages.transcribe, 40),
 )
 
 COMPLETED_MESSAGE = (
-    "Video downloaded and audio extracted. Transcription and clip generation are added "
-    "in later phases."
+    "Transcript ready. Highlight detection and clip generation are added in later phases."
 )
 
 

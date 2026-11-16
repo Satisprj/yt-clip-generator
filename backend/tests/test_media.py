@@ -60,3 +60,16 @@ def test_missing_ffmpeg_binary(monkeypatch, sample_video, tmp_path):
     monkeypatch.setenv("FFMPEG_PATH", "no-such-ffmpeg")
     with pytest.raises(MediaError, match="ffmpeg not found"):
         media.extract_audio(sample_video, tmp_path / "a.wav")
+
+
+def test_load_wav_reads_extracted_audio(sample_video, tmp_path):
+    from app.services.transcription import SAMPLE_RATE, TranscriptionError, load_wav
+
+    wav = media.extract_audio(sample_video, tmp_path / "audio.wav")
+    samples = load_wav(wav)
+    assert samples.dtype.name == "float32"
+    assert abs(len(samples) / SAMPLE_RATE - 3.0) < 0.1
+    assert 0.01 < float(abs(samples).max()) <= 1.0  # the 440 Hz tone is audible
+
+    with pytest.raises(TranscriptionError, match="Could not read"):
+        load_wav(sample_video)  # an MP4 is not a WAV

@@ -8,6 +8,10 @@ export function getJob(jobId, signal) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}`, { signal })
 }
 
+export function getTranscript(jobId, signal) {
+  return apiRequest(`/jobs/${encodeURIComponent(jobId)}/transcript`, { signal })
+}
+
 export function retryJob(jobId) {
   return apiRequest(`/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' })
 }

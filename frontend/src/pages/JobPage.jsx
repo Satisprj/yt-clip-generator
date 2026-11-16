@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { retryJob } from '../api/jobs.js'
 import ProgressBar from '../components/ProgressBar.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
+import TranscriptPanel from '../components/TranscriptPanel.jsx'
 import VideoThumbnail from '../components/VideoThumbnail.jsx'
 import { useJob } from '../hooks/useJob.js'
 import { formatDateTime, formatDuration } from '../utils/format.js'
@@ -109,6 +110,13 @@ export default function JobPage() {
 
       {error && (
         <p className="mt-4 text-sm text-amber-400">Connection problem, retrying… ({error.message})</p>
+      )}
+
+      {/* Loaded once the job stops running; a job that failed later on still has one. */}
+      {(job.status === 'completed' || job.status === 'failed') && (
+        <div className="mt-8">
+          <TranscriptPanel key={job.updated_at} jobId={job.id} youtubeUrl={job.youtube_url} />
+        </div>
       )}
     </section>
   )

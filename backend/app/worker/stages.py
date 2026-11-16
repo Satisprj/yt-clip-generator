@@ -6,10 +6,16 @@ the work, so a failed job resumes where it stopped.
 """
 
 import logging
+import time
+from dataclasses import asdict
+
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.exceptions import InvalidInputError
-from app.services import media, storage, youtube
+from app.models import Transcript
+from app.services import media, storage, transcription, youtube
+from app.services.sentences import split_sentences
 from app.worker.context import StageContext
 
 logger = logging.getLogger(__name__)
@@ -52,6 +58,57 @@ def download(ctx: StageContext) -> None:
         raise InvalidInputError("The video has no audio track, so it can't be transcribed.")
     logger.info("Job %s: downloaded %dx%s %s, %.1f MB", ctx.job.id, info.width or 0,
                 info.height, info.video_codec, info.size_bytes / 1e6)
+
+
+def transcribe(ctx: StageContext) -> None:
+    job = ctx.job
+    if ctx.db.scalar(select(Transcript.id).where(Transcript.job_id == job.id)) is not None:
+        ctx.report(1.0, "Using the existing transcript")
+        return
+
+    files = storage.job_files(job.id)
+    ctx.report(0.0, "Loading the speech model (the first run downloads it)")
+    transcription.get_model()
+
+    started = time.monotonic()
+
+    def progress(fraction: float) -> None:
+        elapsed = time.monotonic() - started
+        eta = ""
+        if 0.05 <= fraction < 1:
+            remaining = elapsed * (1 - fraction) / fraction
+            eta = f", about {_human_duration(remaining)} left"
+        ctx.report(fraction, f"Transcribing: {fraction:.0%}{eta}")
+
+    result = transcription.transcribe(
+        files.audio, duration_seconds=job.duration_seconds, on_progress=progress
+    )
+    if not result.words:
+        raise InvalidInputError("No speech was detected in this video, so it can't be clipped.")
+
+    sentences = split_sentences(result.words)
+    ctx.db.add(Transcript(
+        job_id=job.id,
+        language=result.language,
+        language_probability=result.language_probability,
+        duration_seconds=result.duration_seconds,
+        model=result.model,
+        word_count=len(result.words),
+        sentence_count=len(sentences),
+        words=[asdict(w) for w in result.words],
+        sentences=[s.to_dict() for s in sentences],
+    ))
+    ctx.db.commit()
+    logger.info("Job %s: %d words, %d sentences, language=%s", job.id, len(result.words),
+                len(sentences), result.language)
+
+
+def _human_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{max(seconds, 1)} s"
+    minutes = round(seconds / 60)
+    return f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60} min"
 
 
 def extract_audio(ctx: StageContext) -> None:

@@ -60,7 +60,7 @@ queued → fetching_info → downloading → extracting_audio → transcribing
 | fetching_info | yt-dlp (`download=False`) | title, channel, duration, thumbnail → `jobs` row |
 | downloading | yt-dlp | `source.mp4` (≤1080p) |
 | extracting_audio | FFmpeg | `audio.wav` (16 kHz mono) |
-| transcribing | faster-whisper (`word_timestamps=True`) + VAD | `transcript.json` (words + sentences) |
+| transcribing | faster-whisper (`word_timestamps=True`) + VAD | `transcripts` table (words + sentences, JSONB) |
 | analyzing | Claude via `claude -p` (`claude-opus-5-5`) | ranked candidates as **sentence-ID ranges** |
 | rendering | FFmpeg + OpenCV | `clips/<n>.mp4`, `.ass`, `.srt`, thumbnail |
 
@@ -105,7 +105,7 @@ backend/storage/
   jobs/<job_id>/
     source.mp4
     audio.wav
-    transcript.json
+    (transcript is stored in the transcripts table)
     highlights.json          # raw LLM output (for debugging and re-ranking)
     clips/
       01.mp4  01.ass  01.srt  01.jpg
@@ -229,3 +229,17 @@ subscription login is always used.
 - **Retry**: `POST /api/jobs/{id}/retry` (failed jobs only) re-queues the job.
 - **Download size**: 1080p H.264 is about 20–25 MB per minute of video. On a slow
   connection, set `MAX_DOWNLOAD_HEIGHT=720` to roughly halve download time.
+
+## 12. Transcription and sentences
+
+- faster-whisper runs locally with word timestamps, VAD (skips silence and music) and
+  `condition_on_previous_text=False` (prevents repetition loops on long audio). The model
+  is loaded once per worker process. The first run downloads it (`small` is about 480 MB).
+- Audio is passed as a NumPy array read with Python's `wave` module, bypassing
+  faster-whisper's PyAV decoder, which breaks between PyAV releases.
+- `services/sentences.py` groups words into sentences: split at end punctuation (not at
+  abbreviations), at pauses of 1.2 s or more, and split run-ons longer than 20 s or 60 words
+  at a comma or the longest pause. Each sentence keeps its word range, so the AI can pick
+  sentence IDs and the code converts them to exact word times.
+- Speed on this laptop's CPU with `small`, int8 and greedy decoding: see the README.
+- `GET /api/jobs/{id}/transcript` returns sentences (`?include_words=true` adds words).
