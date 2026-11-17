@@ -136,6 +136,49 @@ def run_ffmpeg(
         on_progress(1.0)
 
 
+def _input_args(source: str, headers: dict[str, str] | None, start: float) -> list[str]:
+    args: list[str] = []
+    if source.startswith(("http://", "https://")):
+        # Survive dropped connections while reading straight from the web.
+        args += ["-reconnect", "1", "-reconnect_on_network_error", "1",
+                 "-reconnect_delay_max", "10", "-rw_timeout", "30000000"]
+        if headers:
+            args += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    return args + ["-ss", f"{start:.3f}", "-i", source]
+
+
+def fetch_segment(
+    video: str,
+    destination: Path,
+    *,
+    start: float,
+    duration: float,
+    audio: str | None = None,
+    video_headers: dict[str, str] | None = None,
+    audio_headers: dict[str, str] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> Path:
+    """Copy `duration` seconds from `start` of a (remote or local) video into an MP4.
+
+    Only the needed part is read (HTTP range requests for web URLs). The segment is
+    re-encoded with a fast preset so it starts exactly at `start` (stream copying would start
+    at the previous keyframe, shifting captions and crops by an unknown amount).
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.stem + ".partial.mp4")
+    args = _input_args(video, video_headers, start)
+    if audio:
+        args += _input_args(audio, audio_headers, start)
+    args += ["-t", f"{duration:.3f}", "-map", "0:v:0",
+             "-map", "1:a:0" if audio else "0:a:0?",
+             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "17",
+             "-c:a", "aac", "-b:a", "192k", str(partial)]
+    run_ffmpeg(args, duration_seconds=duration, on_progress=on_progress,
+               timeout_seconds=max(600.0, duration * 20))
+    partial.replace(destination)
+    return destination
+
+
 def extract_audio(
     source: Path,
     destination: Path,

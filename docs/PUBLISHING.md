@@ -1,11 +1,15 @@
 # Publishing clips to social platforms
 
-| Platform | Status | What you need |
-|----------|--------|---------------|
-| YouTube Shorts | ✅ Available | A YouTube channel + a free Google Cloud project (below) |
-| Instagram Reels | Later | Instagram Business/Creator account linked to a Facebook Page, Meta developer app |
-| Facebook Reels | Later | A Facebook Page (personal profiles can't be posted to by apps), Meta developer app |
-| TikTok | Later | TikTok developer app; posts are private ("only me") until TikTok audits the app |
+| Platform | What you need | Posting limits for new apps |
+|----------|---------------|-----------------------------|
+| YouTube Shorts | YouTube channel + Google Cloud OAuth client (below) | **Private** until Google approves the API audit; ~6 uploads/day |
+| Facebook Reels | A Facebook **Page** + Meta developer app | Public from day one on your own Page (posting to personal profiles is impossible) |
+| Instagram Reels | Instagram **Business/Creator** account linked to that Page + the same Meta app | Public from day one on your own account |
+| TikTok | TikTok account + TikTok for Developers app | **Private ("only me")** until TikTok audits the app |
+
+All four use the same **Publish** button: pick the platforms, write one title and caption
+(or keep the AI's), and the app adapts it to each platform (YouTube title ≤100 characters
+plus `#Shorts`; Instagram and TikTok put the title at the start of the caption).
 
 ## YouTube setup (about 15 minutes, once)
 
@@ -92,3 +96,67 @@ channel shown as connected.
 | "YouTube access expired or was revoked" | Settings → Connect again (common weekly while the app is in *Testing*) |
 | "The daily YouTube upload quota is used up" | Wait until tomorrow (Pacific Time), or request more quota |
 | Published but private | Expected until the audit is approved (see limits above) |
+
+## Facebook Page + Instagram setup (one Meta app, about 20 minutes)
+
+Before you start: you need a **Facebook Page** you manage, and for Instagram an Instagram
+**Business or Creator** account **linked to that Page** (Instagram app → Settings → Account
+type and tools → switch to professional; then link it to the Page in the Page's settings).
+
+1. Open https://developers.facebook.com/apps and click **Create app**.
+2. Use case: choose the one for managing Pages / Instagram content (Facebook Login for
+   Business). App type **Business**. Name it `Clip Generator`.
+3. In the app, add the products **Facebook Login for Business** and **Instagram**
+   (Instagram API with Facebook Login).
+4. Under **Facebook Login for Business → Settings**, add the redirect URI:
+   `http://localhost:5173/api/integrations/meta/callback`
+   (Meta accepts `localhost` while the app is in **Development** mode.)
+5. Under **App settings → Basic**, copy the **App ID** and **App secret** into `backend\.env`:
+   ```
+   META_APP_ID=<app id>
+   META_APP_SECRET=<app secret>
+   ```
+6. Restart the app, open **Settings → Connect with Facebook**, sign in, and select your Page
+   (and its Instagram account) when Meta asks which ones to share. Allow all requested
+   permissions (`pages_manage_posts`, `instagram_content_publish`, …).
+
+You stay in **Development mode**: that's fine because you only post to accounts you own
+(you are the app's admin). App Review is only needed to let *other people* connect their
+accounts. If you manage several Pages, set `META_PAGE_ID` to the one to use.
+
+**How posting works:** Facebook Reels are uploaded and published on the Page (choosing
+*Private* saves the Reel as a draft on the Page instead). Instagram Reels are uploaded,
+processed by Instagram (usually under a minute), then published, and also shared to the feed.
+The Page token doesn't expire, so you don't need to reconnect.
+
+## TikTok setup (about 20 minutes)
+
+1. Open https://developers.tiktok.com, log in, and create an app (**Manage apps → Connect an app**).
+2. Add the products **Login Kit** and **Content Posting API**; enable **Direct Post**.
+3. Scopes: `user.info.basic` and `video.publish`.
+4. Redirect URI (Login Kit → Web): `http://localhost:5173/api/integrations/tiktok/callback`.
+   If TikTok only accepts `https` addresses, use an HTTPS tunnel (e.g. `ngrok http 5173` or
+   Cloudflare Tunnel), register `https://<your-tunnel>/api/integrations/tiktok/callback`, and
+   set the same value as `TIKTOK_REDIRECT_URI` in `backend\.env`.
+5. Add your TikTok account under **Sandbox / Target users** if TikTok asks for test users.
+6. Copy the **Client key** and **Client secret** into `backend\.env`:
+   ```
+   TIKTOK_CLIENT_KEY=<client key>
+   TIKTOK_CLIENT_SECRET=<client secret>
+   ```
+7. Restart the app and use **Settings → TikTok → Connect**.
+
+**Limits:** until TikTok approves your app's audit, posts can only be **private ("only
+me")**; the app picks the most open privacy level TikTok allows and falls back to private.
+TikTok also limits how many videos an account can post per day through the API. Access
+tokens last a day and are refreshed automatically.
+
+## What has and hasn't been verified
+
+The four connectors follow each platform's published API flow and are covered by automated
+tests against fake servers that mimic those flows (sign-in, token refresh, chunked or
+resumable uploads, processing status, errors). They have **not yet been run against the real
+platforms with your accounts**, because that needs the developer apps above. After you add
+the keys, connect each account and publish one clip: if a platform answers differently from
+its documentation, the clip shows the platform's exact error message, which tells us what to
+adjust.

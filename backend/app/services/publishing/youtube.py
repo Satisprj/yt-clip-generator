@@ -9,11 +9,8 @@ the project passes YouTube's API audit. Each upload costs about 1,600 of the def
 10,000 daily quota units (roughly 6 uploads/day).
 """
 
-import base64
-import hashlib
 import json
 import logging
-import secrets as pysecrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,8 +22,8 @@ from urllib.parse import urlencode
 import httpx
 
 from app.core.config import get_settings
-from app.core.exceptions import AppError, ExternalServiceError, InvalidInputError
-from app.services.publishing import secrets
+from app.core.exceptions import AppError, ExternalServiceError
+from app.services.publishing import http
 from app.services.publishing.captions import PostContent
 
 logger = logging.getLogger(__name__)
@@ -41,11 +38,6 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
 
 CHUNK_SIZE = 8 * 1024 * 1024  # multiple of 256 KiB, as the protocol requires
 MAX_RETRIES = 5
-STATE_TTL = 600  # seconds the user has to finish the Google sign-in
-
-# Tests replace this to route requests to a fake server (httpx.MockTransport).
-transport: httpx.BaseTransport | None = None
-
 
 class YouTubeError(ExternalServiceError):
     code = "youtube_error"
@@ -72,7 +64,7 @@ class Channel:
 
 
 def _client(timeout: float = 30.0) -> httpx.Client:
-    return httpx.Client(transport=transport, timeout=timeout, follow_redirects=False)
+    return http.client(timeout)
 
 
 def _credentials() -> tuple[str, str]:
@@ -107,10 +99,8 @@ def authorization_url() -> str:
     needs to be stored between the redirect and the callback.
     """
     client_id, _ = _credentials()
-    verifier = pysecrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()) \
-        .rstrip(b"=").decode()
-    state = secrets.encrypt(json.dumps({"platform": "youtube", "verifier": verifier}))
+    verifier, challenge = http.pkce_pair()
+    state = http.make_state("youtube", verifier=verifier)
     params = {
         "client_id": client_id,
         "redirect_uri": get_settings().google_redirect_uri,
@@ -128,15 +118,10 @@ def authorization_url() -> str:
 
 def exchange_code(code: str, state: str) -> Tokens:
     client_id, client_secret = _credentials()
-    try:
-        data = json.loads(secrets.decrypt(state, ttl=STATE_TTL))
-    except AppError as exc:
-        raise InvalidInputError("The sign-in link expired or is invalid. Try again.") from exc
-    if data.get("platform") != "youtube":
-        raise InvalidInputError("The sign-in response doesn't belong to YouTube.")
+    data = http.read_state(state, "youtube")
 
-    with _client() as http:
-        response = http.post(TOKEN_URL, data={
+    with _client() as c:
+        response = c.post(TOKEN_URL, data={
             "code": code, "client_id": client_id, "client_secret": client_secret,
             "redirect_uri": get_settings().google_redirect_uri,
             "grant_type": "authorization_code", "code_verifier": data["verifier"],
@@ -148,8 +133,8 @@ def exchange_code(code: str, state: str) -> Tokens:
 
 def refresh(refresh_token: str) -> Tokens:
     client_id, client_secret = _credentials()
-    with _client() as http:
-        response = http.post(TOKEN_URL, data={
+    with _client() as c:
+        response = c.post(TOKEN_URL, data={
             "refresh_token": refresh_token, "client_id": client_id,
             "client_secret": client_secret, "grant_type": "refresh_token",
         })
@@ -163,8 +148,8 @@ def refresh(refresh_token: str) -> Tokens:
 def revoke(token: str) -> None:
     """Best effort: tell Google to drop the grant."""
     try:
-        with _client(timeout=10) as http:
-            http.post(REVOKE_URL, params={"token": token})
+        with _client(timeout=10) as c:
+            c.post(REVOKE_URL, params={"token": token})
     except httpx.HTTPError:
         logger.warning("Could not revoke the YouTube token (continuing)")
 
@@ -183,8 +168,8 @@ def _tokens_from(data: dict[str, Any], previous_refresh: str | None) -> Tokens:
 
 
 def get_channel(access_token: str) -> Channel:
-    with _client() as http:
-        response = http.get(CHANNELS_URL, params={"part": "snippet", "mine": "true"},
+    with _client() as c:
+        response = c.get(CHANNELS_URL, params={"part": "snippet", "mine": "true"},
                             headers={"Authorization": f"Bearer {access_token}"})
     if response.status_code != 200:
         raise YouTubeError(f"Could not read your YouTube channel: {_google_error(response)}")
@@ -229,8 +214,8 @@ def upload_video(
     }
     auth = {"Authorization": f"Bearer {access_token}"}
 
-    with _client(timeout=120) as http:
-        start = http.post(
+    with _client(timeout=120) as c:
+        start = c.post(
             UPLOAD_URL, params={"uploadType": "resumable", "part": "snippet,status"},
             headers={**auth, "Content-Type": "application/json; charset=UTF-8",
                      "X-Upload-Content-Length": str(size),
@@ -238,7 +223,7 @@ def upload_video(
             content=json.dumps(metadata).encode(),
         )
         if start.status_code == 401:
-            raise YouTubeError("Unauthorized", code="youtube_unauthorized")
+            raise YouTubeError("Unauthorized", code="unauthorized")
         if start.status_code != 200 or "location" not in start.headers:
             raise _upload_error(start)
         session_url = start.headers["location"]
@@ -250,7 +235,7 @@ def upload_video(
                     fh.seek(offset)
                     chunk = fh.read(CHUNK_SIZE)
                     end = offset + len(chunk) - 1
-                    response = http.put(session_url, content=chunk, headers={
+                    response = c.put(session_url, content=chunk, headers={
                         **auth, "Content-Length": str(len(chunk)),
                         "Content-Range": f"bytes {offset}-{end}/{size}"})
                 except httpx.TransportError as exc:
@@ -277,7 +262,7 @@ def upload_video(
                 if retries > MAX_RETRIES:
                     raise YouTubeError(f"Upload interrupted too many times: {error or response}")
                 sleep(min(60, 2 ** retries))
-                status = http.put(session_url, headers={
+                status = c.put(session_url, headers={
                     **auth, "Content-Length": "0", "Content-Range": f"bytes */{size}"})
                 if status.status_code in (200, 201):
                     body = status.json()

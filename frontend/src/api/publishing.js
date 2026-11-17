@@ -4,9 +4,9 @@ export function listIntegrations(signal) {
   return apiRequest('/integrations', { signal })
 }
 
-/** Returns the Google sign-in URL; the caller navigates the browser there. */
-export function getYouTubeConnectUrl() {
-  return apiRequest('/integrations/youtube/connect').then((r) => r.auth_url)
+/** Sign-in URL for a connect group: "youtube", "meta" (Facebook + Instagram) or "tiktok". */
+export function getConnectUrl(group) {
+  return apiRequest(`/integrations/${encodeURIComponent(group)}/connect`).then((r) => r.auth_url)
 }
 
 export function disconnectPlatform(platform) {

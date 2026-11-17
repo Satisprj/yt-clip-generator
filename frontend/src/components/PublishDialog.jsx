@@ -70,11 +70,11 @@ export default function PublishDialog({ clip, jobId, clipCount, onClose, onPubli
               return (
                 <label key={i.platform}
                   className={`flex items-center gap-2 rounded-lg border p-2 text-sm ${usable ? 'border-slate-700' : 'border-slate-800 text-slate-500'}`}
-                  title={usable ? i.account.name : i.supported ? 'Not connected' : i.note ?? ''}>
+                  title={usable ? i.account.name : 'Not connected: see Settings'}>
                   <input type="checkbox" disabled={!usable} checked={selected.includes(i.platform)}
                     onChange={() => toggle(i.platform)} className="accent-rose-500" />
                   <span>{PLATFORM_LABELS[i.platform]}</span>
-                  {!usable && <span className="ml-auto text-[10px]">{i.supported ? 'not connected' : 'later'}</span>}
+                  {!usable && <span className="ml-auto text-[10px]">not connected</span>}
                 </label>
               )
             })}
@@ -87,7 +87,7 @@ export default function PublishDialog({ clip, jobId, clipCount, onClose, onPubli
         </fieldset>
 
         <label className="mt-4 block text-sm">
-          <span className="text-slate-400">Visibility (YouTube)</span>
+          <span className="text-slate-400">Visibility</span>
           <select value={privacy} onChange={(e) => setPrivacy(e.target.value)}
             className="mt-1 block w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5">
             <option value="private">Private</option>
@@ -95,7 +95,8 @@ export default function PublishDialog({ clip, jobId, clipCount, onClose, onPubli
             <option value="public">Public</option>
           </select>
           <span className="mt-1 block text-xs text-slate-500">
-            Until your Google project passes YouTube's audit, uploads stay private whatever you pick.
+            YouTube and TikTok post privately until their API audits are approved, whatever you pick.
+            Facebook: Private saves the Reel as a draft. Instagram Reels are always public.
           </span>
         </label>
 

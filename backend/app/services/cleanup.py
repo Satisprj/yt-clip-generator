@@ -70,8 +70,9 @@ def run_cleanup(now: datetime | None = None) -> CleanupReport:
             cutoff = now - timedelta(days=settings.source_retention_days)
             for job in db.scalars(select(Job).where(Job.status.in_(TERMINAL),
                                                     Job.completed_at < cutoff)):
-                if not storage.job_files(job.id).source_video.is_file() and \
-                        not storage.job_files(job.id).audio.is_file():
+                files = storage.job_files(job.id)
+                if not (files.source_video.is_file() or files.audio.is_file()
+                        or files.audio_source is not None):
                     continue
                 try:
                     report.bytes_freed += storage.delete_source_files(job.id)

@@ -12,7 +12,7 @@ from app.core.exceptions import InvalidInputError
 from app.models import Clip, Job, JobStatus, Platform, PlatformAccount, Publication
 from app.models import PublicationStatus as PS
 from app.services import storage
-from app.services.publishing import secrets, service, youtube
+from app.services.publishing import http, secrets, service, youtube
 from app.services.publishing.captions import build_post_content, default_caption
 from app.worker import tasks
 
@@ -81,7 +81,7 @@ class FakeGoogle:
 @pytest.fixture
 def google(monkeypatch, storage_dir):
     fake = FakeGoogle()
-    monkeypatch.setattr(youtube, "transport", httpx.MockTransport(fake))
+    monkeypatch.setattr(http, "transport", httpx.MockTransport(fake))
     monkeypatch.setattr(youtube, "CHUNK_SIZE", 1000)
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "client-secret")
@@ -271,7 +271,9 @@ def test_publish_requires_connection_and_supported_platform(client, db, google, 
     not_connected = client.post(f"/api/clips/{clip.id}/publish", json={"platforms": ["youtube"]})
     assert not_connected.json()["error"]["code"] == "account_not_connected"
     tiktok = client.post(f"/api/clips/{clip.id}/publish", json={"platforms": ["tiktok"]})
-    assert tiktok.status_code == 400 and "isn't available yet" in tiktok.json()["error"]["message"]
+    assert tiktok.json()["error"]["code"] == "account_not_connected"
+    unknown = client.post(f"/api/clips/{clip.id}/publish", json={"platforms": ["myspace"]})
+    assert unknown.status_code == 422
     assert client.post(f"/api/clips/{clip.id}/publish",
                        json={"platforms": []}).status_code == 422
 

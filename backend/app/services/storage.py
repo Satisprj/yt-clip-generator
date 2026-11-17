@@ -22,6 +22,15 @@ class JobFiles:
         return self.dir / "audio.wav"
 
     @property
+    def audio_source(self) -> Path | None:
+        """Audio-only download (smart mode), e.g. audio_source.webm; None if absent."""
+        if not self.dir.is_dir():
+            return None
+        found = [p for p in self.dir.glob("audio_source.*")
+                 if p.suffix not in (".part", ".ytdl", ".tmp")]
+        return found[0] if found else None
+
+    @property
     def clips_dir(self) -> Path:
         return self.dir / "clips"
 
@@ -70,7 +79,8 @@ def delete_source_files(job_id: uuid.UUID) -> int:
     targets = [files.source_video, files.audio]
     if files.dir.is_dir():
         targets += [p for p in files.dir.iterdir()
-                    if p.is_file() and p.name.startswith("source.") and p != files.source_video]
+                    if p.is_file() and p != files.source_video
+                    and (p.name.startswith("source.") or p.name.startswith("audio_source."))]
     freed = 0
     for path in targets:
         if path.is_file():

@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -52,6 +53,27 @@ def download(ctx: StageContext) -> None:
         ctx.report(1.0, "Using the previously downloaded video")
         return
 
+    if get_settings().download_mode == "smart":
+        # Audio first: transcription and highlight detection only need sound. The video for
+        # the chosen clips is fetched later, segment by segment, in the render stage.
+        audio_source = files.audio_source
+        if media.is_valid_media(files.audio, need_video=False, need_audio=True) or (
+                audio_source is not None
+                and media.is_valid_media(audio_source, need_video=False, need_audio=True)):
+            ctx.report(1.0, "Using the previously downloaded audio")
+            return
+        storage.ensure_free_space(files.dir, get_settings().min_free_disk_mb * 1024 * 1024)
+        source = youtube.download_audio(ctx.job.youtube_url, files.dir, on_progress=ctx.report)
+        if not media.probe(source).has_audio:
+            raise InvalidInputError("The video has no audio track, so it can't be transcribed.")
+        logger.info("Job %s: downloaded audio only (%.1f MB)", ctx.job.id,
+                    source.stat().st_size / 1e6)
+        return
+
+    _download_full_video(ctx, files)
+
+
+def _download_full_video(ctx: StageContext, files: storage.JobFiles) -> None:
     reserve = get_settings().min_free_disk_mb * 1024 * 1024
 
     def check_space(estimated_bytes: int | None) -> None:
@@ -199,6 +221,7 @@ def render(ctx: StageContext) -> None:
     if transcript is None:
         raise InvalidInputError("This job has no transcript, so captions can't be made.")
 
+    sources = _ClipSources(ctx, files, clips)
     for i, clip in enumerate(todo):
         label = f"clip {i + 1} of {len(todo)}"
 
@@ -206,9 +229,11 @@ def render(ctx: StageContext) -> None:
             ctx.report((i + fraction) / len(todo), f"Rendering {label}: {message.lower()}")
 
         name = f"{clip.rank:02d}"
+        segment: Path | None = None
         try:
+            source, offset, segment = sources.for_clip(clip, name, progress)
             result = render_service.render_clip(
-                files.source_video, start=clip.start_seconds, end=clip.end_seconds,
+                source, start=clip.start_seconds - offset, end=clip.end_seconds - offset,
                 words=clip_words(transcript, clip), out_dir=files.clips_dir, name=name,
                 language=transcript.language, on_progress=progress,
             )
@@ -218,6 +243,9 @@ def render(ctx: StageContext) -> None:
             clip.render_status, clip.render_error = "failed", exc.message
             ctx.db.commit()
             continue
+        finally:
+            if segment is not None:
+                segment.unlink(missing_ok=True)  # segments are only needed for rendering
         clip.render_status, clip.render_error = "ready", None
         clip.layout = result.layout
         clip.video_file = result.video.name
@@ -229,6 +257,62 @@ def render(ctx: StageContext) -> None:
     failed = [c for c in clips if c.render_status != "ready"]
     if len(failed) == len(clips):
         raise ExternalServiceError(f"Rendering failed for every clip: {failed[0].render_error}")
+
+
+SEGMENT_PAD = 1.0  # seconds fetched before/after a clip (room for the reframe analysis)
+
+
+class _ClipSources:
+    """Where each clip's video comes from: the full download, or a fetched segment.
+
+    Smart mode fetches only the seconds each clip needs, straight from YouTube. It switches
+    to one full download when the clips cover a large part of the video (cheaper overall),
+    or when fetching a segment fails.
+    """
+
+    def __init__(self, ctx: StageContext, files: storage.JobFiles, clips: list[Clip]) -> None:
+        self.ctx, self.files = ctx, files
+        self.streams: tuple[youtube.Stream, youtube.Stream | None] | None = None
+        settings = get_settings()
+        video_seconds = float(ctx.job.duration_seconds or 0) or 1.0
+        covered = sum(c.duration_seconds + 2 * SEGMENT_PAD for c in clips)
+        self.use_full = (
+            settings.download_mode != "smart"
+            or media.is_valid_media(files.source_video, need_video=True, need_audio=True)
+            or covered / video_seconds > settings.segment_max_fraction
+        )
+
+    def _ensure_full(self, progress) -> None:
+        if not media.is_valid_media(self.files.source_video, need_video=True, need_audio=True):
+            progress(0.0, "Downloading the video")
+            _download_full_video(self.ctx, self.files)
+        self.use_full = True
+
+    def for_clip(self, clip: Clip, name: str, progress) -> tuple[Path, float, Path | None]:
+        """(source file, its start time in the original video, temp segment to delete)."""
+        if self.use_full:
+            self._ensure_full(progress)
+            return self.files.source_video, 0.0, None
+        start = max(0.0, clip.start_seconds - SEGMENT_PAD)
+        duration = clip.end_seconds + SEGMENT_PAD - start
+        segment = self.files.clips_dir / f"{name}.source.mp4"
+        try:
+            if self.streams is None:
+                self.streams = youtube.resolve_streams(self.ctx.job.youtube_url)
+            video, audio = self.streams
+            progress(0.0, "Fetching this clip's video")
+            media.fetch_segment(
+                video.url, segment, start=start, duration=duration,
+                audio=audio.url if audio else None, video_headers=video.headers,
+                audio_headers=audio.headers if audio else None,
+                on_progress=lambda f: progress(0.15 * f, f"Fetching this clip's video: {f:.0%}"))
+        except AppError as exc:
+            logger.warning("Job %s: fetching a segment failed (%s); downloading the full video",
+                           self.ctx.job.id, exc.message)
+            segment.unlink(missing_ok=True)
+            self._ensure_full(progress)
+            return self.files.source_video, 0.0, None
+        return segment, start, segment
 
 
 def completion_message(db, job) -> str:
@@ -257,8 +341,11 @@ def extract_audio(ctx: StageContext) -> None:
     if media.is_valid_media(files.audio, need_video=False, need_audio=True):
         ctx.report(1.0, "Using the previously extracted audio")
         return
+    source = files.source_video if files.source_video.is_file() else files.audio_source
+    if source is None:
+        raise InvalidInputError("Nothing to extract audio from: the download is missing. Retry.")
     media.extract_audio(
-        files.source_video,
+        source,
         files.audio,
         duration_seconds=ctx.job.duration_seconds,
         on_progress=lambda f: ctx.report(f, f"Extracting audio: {f:.0%}"),

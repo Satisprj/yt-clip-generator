@@ -91,10 +91,10 @@ CLI are all ready (details: http://localhost:8000/api/health/ready).
    - **Free up space**: delete the downloaded video and audio but keep the clips.
    - **Delete job**: removes everything for that job.
 5. **History:** all jobs with clip count and disk use, total disk use, and delete.
-6. **Publish:** connect your YouTube channel once under **Settings**, then use **📤 Publish**
-   on a clip (same title and caption on every selected platform) or **📤 Publish all**. Setup
-   guide and limits: [docs/PUBLISHING.md](docs/PUBLISHING.md). Instagram, Facebook and
-   TikTok are planned (they need business accounts and developer apps).
+6. **Publish:** connect YouTube, Facebook + Instagram (one Meta sign-in) and TikTok once
+   under **Settings**, then use **📤 Publish** on a clip (same title and caption on every
+   selected platform) or **📤 Publish all**. Each platform needs a free developer app; setup
+   guide and limits: [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Settings (`backend\.env`)
 

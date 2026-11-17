@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   PLATFORM_LABELS,
   disconnectPlatform,
-  getYouTubeConnectUrl,
+  getConnectUrl,
   listIntegrations,
 } from '../api/publishing.js'
 import { formatDateTime } from '../utils/format.js'
@@ -11,13 +11,19 @@ import { formatDateTime } from '../utils/format.js'
 function IntegrationCard({ integration, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const { platform, supported, configured, account, note } = integration
+  const { platform, supported, configured, account, note, connect_group: group } = integration
+  const provider = { youtube: 'Google', meta: 'Facebook', tiktok: 'TikTok' }[group] ?? group
+  const envKeys = {
+    youtube: 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET',
+    meta: 'META_APP_ID and META_APP_SECRET',
+    tiktok: 'TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET',
+  }[group]
 
   async function connect() {
     setBusy(true)
     setError(null)
     try {
-      window.location.assign(await getYouTubeConnectUrl()) // leaves the app for Google sign-in
+      window.location.assign(await getConnectUrl(group)) // leaves the app to sign in
     } catch (err) {
       setError(err.message)
       setBusy(false)
@@ -53,13 +59,13 @@ function IntegrationCard({ integration, onChanged }) {
           <p className="text-sm text-slate-400">
             {account
               ? <>Connected: <span className="text-slate-200">{account.name}</span> · since {formatDateTime(account.connected_at)}</>
-              : supported ? (configured ? 'Not connected' : 'Needs setup (see below)') : 'Coming later'}
+              : configured ? 'Not connected' : 'Needs setup (see below)'}
           </p>
         </div>
         {supported && !account && (
           <button onClick={connect} disabled={busy || !configured}
             className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold hover:bg-rose-400 disabled:opacity-50">
-            {busy ? 'Opening Google…' : 'Connect'}
+            {busy ? `Opening ${provider}…` : group === 'meta' ? 'Connect with Facebook' : 'Connect'}
           </button>
         )}
         {account && (
@@ -69,17 +75,14 @@ function IntegrationCard({ integration, onChanged }) {
           </button>
         )}
       </div>
-      {!supported && note && <p className="mt-3 text-xs text-slate-500">{note}</p>}
+      {note && <p className="mt-3 text-xs text-slate-500">{note}</p>}
+      {group === 'meta' && (
+        <p className="mt-1 text-xs text-slate-500">One Facebook sign-in connects both your Page and its Instagram account.</p>
+      )}
       {supported && !configured && (
         <p className="mt-3 text-xs text-amber-300">
-          Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to <code>backend\.env</code>{' '}
-          and restart the API. Step-by-step guide: <code>docs/PUBLISHING.md</code>.
-        </p>
-      )}
-      {platform === 'youtube' && (
-        <p className="mt-3 text-xs text-slate-500">
-          New Google Cloud projects can only upload <b>private</b> videos until YouTube approves an API audit,
-          and about 6 uploads per day fit in the default quota.
+          Add {envKeys} to <code>backend\.env</code> and restart the API.
+          Step-by-step guide: <code>docs/PUBLISHING.md</code>.
         </p>
       )}
       {error && <p role="alert" className="mt-2 text-sm text-rose-300">{error}</p>}

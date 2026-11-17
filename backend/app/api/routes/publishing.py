@@ -24,7 +24,7 @@ from app.schemas.publishing import (
     PublishResult,
 )
 from app.services import jobs as job_service
-from app.services.publishing import service, youtube
+from app.services.publishing import meta, service, tiktok, youtube
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["publishing"])
@@ -35,27 +35,80 @@ DbSession = Annotated[Session, Depends(get_db)]
 # --- Integrations ------------------------------------------------------------------------
 
 
+def _configured(platform: Platform) -> bool:
+    s = get_settings()
+    group = service.CONNECT_GROUP[platform]
+    if group == "youtube":
+        return bool(s.google_client_id) and s.google_client_secret is not None
+    if group == "meta":
+        return bool(s.meta_app_id) and s.meta_app_secret is not None
+    return bool(s.tiktok_client_key) and s.tiktok_client_secret is not None
+
+
 @router.get("/integrations", response_model=list[IntegrationStatus])
 def list_integrations(db: DbSession) -> list[IntegrationStatus]:
-    settings = get_settings()
     out = []
     for platform in Platform:
         account = service.get_account(db, platform)
         out.append(IntegrationStatus(
             platform=platform,
             supported=platform in service.SUPPORTED,
-            configured=(platform is Platform.YOUTUBE and bool(settings.google_client_id)
-                        and settings.google_client_secret is not None),
+            configured=_configured(platform),
+            connect_group=service.CONNECT_GROUP[platform],
             account=AccountRead.model_validate(account) if account else None,
-            note=service.COMING_SOON.get(platform),
+            note=service.REQUIREMENTS.get(platform),
         ))
     return out
 
 
-@router.get("/integrations/youtube/connect", response_model=ConnectResponse)
-def youtube_connect() -> ConnectResponse:
-    """Google sign-in URL. The frontend sends the browser there."""
-    return ConnectResponse(auth_url=youtube.authorization_url())
+AUTH_URLS = {"youtube": youtube.authorization_url, "meta": meta.authorization_url,
+             "tiktok": tiktok.authorization_url}
+
+
+@router.get("/integrations/{group}/connect", response_model=ConnectResponse)
+def connect(group: str) -> ConnectResponse:
+    """Sign-in URL for 'youtube', 'meta' (Facebook + Instagram) or 'tiktok'."""
+    if group not in AUTH_URLS:
+        raise NotFoundError("Unknown platform.")
+    return ConnectResponse(auth_url=AUTH_URLS[group]())
+
+
+def _back_to_settings(**params: str) -> RedirectResponse:
+    target = f"{get_settings().frontend_url.rstrip('/')}/settings"
+    return RedirectResponse(f"{target}?{urlencode(params)}", status_code=303)
+
+
+def _callback(platform_name: str, connect_fn, db: Session, code: str | None,
+              state: str | None, error: str | None, error_description: str | None
+              ) -> RedirectResponse:
+    if error or not code or not state:
+        denied = error in ("access_denied", "user_denied")
+        message = (f"{platform_name} access was not granted." if denied else
+                   f"{platform_name} sign-in failed ({error_description or error or 'no code'}).")
+        return _back_to_settings(error=message)
+    try:
+        names = connect_fn(db, code, state)
+    except AppError as exc:
+        return _back_to_settings(error=exc.message)
+    return _back_to_settings(connected=names)
+
+
+@router.get("/integrations/meta/callback", include_in_schema=False)
+def meta_callback(db: DbSession, code: str | None = None, state: str | None = None,
+                  error: str | None = None, error_description: str | None = None
+                  ) -> RedirectResponse:
+    def connect_fn(db, code, state):
+        accounts = service.connect_meta(db, code, state)
+        return " and ".join(a.name for a in accounts)
+    return _callback("Facebook", connect_fn, db, code, state, error, error_description)
+
+
+@router.get("/integrations/tiktok/callback", include_in_schema=False)
+def tiktok_callback(db: DbSession, code: str | None = None, state: str | None = None,
+                    error: str | None = None, error_description: str | None = None
+                    ) -> RedirectResponse:
+    return _callback("TikTok", lambda db, c, s: service.connect_tiktok(db, c, s).name,
+                     db, code, state, error, error_description)
 
 
 @router.get("/integrations/youtube/callback", include_in_schema=False)

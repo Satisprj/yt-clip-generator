@@ -8,6 +8,8 @@ os.environ["APP_ENV"] = "test"
 os.environ["RENDER_WIDTH"] = "216"
 os.environ["RENDER_HEIGHT"] = "384"
 os.environ["RENDER_PRESET"] = "ultrafast"
+# Most pipeline tests use the full-download path; smart mode has its own tests.
+os.environ["DOWNLOAD_MODE"] = "full"
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+pg8000://clipgen:clipgen@localhost:5432/clipgen_test"
 )

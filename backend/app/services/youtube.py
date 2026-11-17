@@ -153,6 +153,87 @@ def _format_selector(max_height: int) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class Stream:
+    """A direct media URL (with the HTTP headers YouTube expects) for FFmpeg to read."""
+
+    url: str
+    headers: dict[str, str]
+
+
+def resolve_streams(url: str) -> tuple[Stream, Stream | None]:
+    """Direct URLs of the best video (and separate audio) without downloading anything.
+
+    URLs expire after a few hours, so resolve them right before use.
+    """
+    options = {**ydl_base_options(), **_format_selector(get_settings().max_download_height),
+               "skip_download": True}
+    try:
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except DownloadError as exc:
+        raise _translate_error(exc) from exc
+    if not info:
+        raise ExternalServiceError("YouTube returned no stream information.")
+    formats = info.get("requested_formats") or [info]
+
+    def stream(f: dict[str, Any]) -> Stream:
+        return Stream(f["url"], dict(f.get("http_headers") or {}))
+
+    if len(formats) == 1:
+        return stream(formats[0]), None
+    video = next(f for f in formats if f.get("vcodec") not in (None, "none"))
+    audio = next(f for f in formats if f is not video)
+    return stream(video), stream(audio)
+
+
+def download_audio(
+    url: str,
+    directory: Path,
+    *,
+    on_progress: DownloadProgress | None = None,
+) -> Path:
+    """Download only the audio track (a few MB per 10 minutes) as audio_source.<ext>."""
+    directory.mkdir(parents=True, exist_ok=True)
+    report = on_progress or (lambda fraction, message: None)
+
+    def progress_hook(d: dict[str, Any]) -> None:
+        if d.get("status") != "downloading":
+            return
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        if total:
+            fraction = min(0.99, int(d.get("downloaded_bytes") or 0) / total)
+            report(fraction, f"Downloading audio: {fraction:.0%}")
+
+    options = {
+        **ydl_base_options(),
+        # Small speech-quality audio is plenty for transcription (16 kHz mono later).
+        "format": "ba[abr<=96]/ba/b",
+        "outtmpl": {"default": str(directory / "audio_source.%(ext)s")},
+        "progress_hooks": [progress_hook],
+        "noprogress": True,
+        "continuedl": True,
+        "retries": 5,
+        "fragment_retries": 10,
+    }
+    try:
+        with YoutubeDL(options) as ydl:
+            ydl.extract_info(url, download=True)
+    except DownloadError as exc:
+        raise _translate_error(exc) from exc
+    except AppError:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected yt-dlp audio download failure for %s", url)
+        raise ExternalServiceError(f"Audio download failed: {exc}") from exc
+
+    found = [p for p in directory.glob("audio_source.*") if p.suffix not in (".part", ".ytdl")]
+    if not found:
+        raise ExternalServiceError("Audio download finished but no audio file was created.")
+    report(1.0, "Audio downloaded")
+    return found[0]
+
+
 def _estimated_size(info: dict[str, Any]) -> int | None:
     formats = info.get("requested_formats") or [info]
     sizes = [f.get("filesize") or f.get("filesize_approx") for f in formats]

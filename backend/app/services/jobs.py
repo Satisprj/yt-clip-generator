@@ -166,7 +166,8 @@ def job_stats(db: Session, jobs: list[Job]) -> dict[uuid.UUID, JobStats]:
         files = storage.job_files(job.id)
         total, ready = counts.get(job.id, (0, 0))
         stats[job.id] = JobStats(total, ready, storage.directory_size(files.dir),
-                                 files.source_video.is_file())
+                                 files.source_video.is_file() or files.audio.is_file()
+                                 or files.audio_source is not None)
     return stats
 
 

@@ -21,6 +21,7 @@ class IntegrationStatus(BaseModel):
     platform: Platform
     supported: bool          # implemented in this version
     configured: bool         # developer credentials present in .env
+    connect_group: str       # youtube | meta (Facebook + Instagram together) | tiktok
     account: AccountRead | None
     note: str | None = None
 

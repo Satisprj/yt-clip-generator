@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     storage_dir: Path = Path("storage")
     max_video_duration_seconds: int = Field(default=3 * 3600, gt=0)
     max_download_height: int = Field(default=1080, ge=144, le=2160)
+    # "smart": download audio first, then only the seconds of video each clip needs.
+    # "full": download the whole video up front (the original behaviour).
+    download_mode: Literal["smart", "full"] = "smart"
+    # In smart mode, download the whole video instead when the clips cover more than this
+    # share of it (fetching many segments would then be slower than one download).
+    segment_max_fraction: float = Field(default=0.4, gt=0, le=1)
     # Free space to keep on top of the expected download size.
     min_free_disk_mb: int = Field(default=2048, ge=0)
     clip_min_seconds: int = Field(default=20, gt=0)
@@ -83,6 +89,16 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:5173/api/integrations/youtube/callback"
     youtube_default_privacy: Literal["private", "unlisted", "public"] = "private"
     youtube_category_id: str = "22"  # People & Blogs
+    # Facebook Pages + Instagram (one Meta developer app, "Facebook Login for Business")
+    meta_app_id: str | None = None
+    meta_app_secret: SecretStr | None = None
+    meta_redirect_uri: str = "http://localhost:5173/api/integrations/meta/callback"
+    meta_graph_version: str = "v25.0"
+    meta_page_id: str | None = None  # which Page to use if you manage several
+    # TikTok (TikTok for Developers app with Login Kit + Content Posting API)
+    tiktok_client_key: str | None = None
+    tiktok_client_secret: SecretStr | None = None
+    tiktok_redirect_uri: str = "http://localhost:5173/api/integrations/tiktok/callback"
 
     # --- Rendering ---
     render_width: int = Field(default=1080, ge=144)
@@ -102,7 +118,8 @@ class Settings(BaseSettings):
 
     @field_validator("ytdlp_cookies_file", "js_runtime_path", "whisper_language",
                      "subtitle_font", "token_encryption_key", "google_client_id",
-                     "google_client_secret", mode="before")
+                     "google_client_secret", "meta_app_id", "meta_app_secret", "meta_page_id",
+                     "tiktok_client_key", "tiktok_client_secret", mode="before")
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value

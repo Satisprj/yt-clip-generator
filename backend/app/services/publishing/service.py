@@ -14,7 +14,7 @@ from app.core.exceptions import AppError, ConflictError, InvalidInputError, NotF
 from app.models import Clip, Platform, PlatformAccount, Publication, PublicationStatus
 from app.models.job import utcnow
 from app.services import storage
-from app.services.publishing import secrets, youtube
+from app.services.publishing import meta, secrets, tiktok, youtube
 from app.services.publishing.captions import (
     PostContent,
     build_post_content,
@@ -24,13 +24,20 @@ from app.services.publishing.captions import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED = {Platform.YOUTUBE}
-COMING_SOON = {
-    Platform.INSTAGRAM: "Needs an Instagram Business/Creator account linked to a Facebook Page.",
-    Platform.FACEBOOK: "Needs a Facebook Page (posting to personal profiles isn't possible).",
-    Platform.TIKTOK: "Needs a TikTok account and developer app; posts stay private until "
-                     "TikTok audits the app.",
+SUPPORTED = set(Platform)
+REQUIREMENTS = {
+    Platform.YOUTUBE: "Needs a YouTube channel and a Google Cloud OAuth client. Uploads stay "
+                      "private until Google approves the API audit.",
+    Platform.INSTAGRAM: "Needs an Instagram Business/Creator account linked to a Facebook Page, "
+                        "and a Meta developer app. Connect via Facebook (one login for both).",
+    Platform.FACEBOOK: "Needs a Facebook Page (apps can't post to personal profiles) and a Meta "
+                       "developer app. 'Private' saves the Reel as a draft on the Page.",
+    Platform.TIKTOK: "Needs a TikTok developer app. Posts are private ('only me') until TikTok "
+                     "audits the app.",
 }
+# Facebook and Instagram are connected together with one Meta login.
+CONNECT_GROUP = {Platform.FACEBOOK: "meta", Platform.INSTAGRAM: "meta",
+                 Platform.YOUTUBE: "youtube", Platform.TIKTOK: "tiktok"}
 PRIVACY_VALUES = {"private", "unlisted", "public"}
 ACTIVE = (PublicationStatus.QUEUED, PublicationStatus.UPLOADING, PublicationStatus.PUBLISHED)
 
@@ -57,6 +64,50 @@ def connect_youtube(db: Session, code: str, state: str) -> PlatformAccount:
     return account
 
 
+def _save_account(db: Session, platform: Platform, *, external_id: str, name: str,
+                  avatar_url: str | None, access: str, refresh: str | None,
+                  expires_at, scopes: str) -> PlatformAccount:
+    account = get_account(db, platform) or PlatformAccount(platform=platform)
+    account.external_id, account.name, account.avatar_url = external_id, name, avatar_url
+    account.access_token_enc = secrets.encrypt(access)
+    account.refresh_token_enc = secrets.encrypt(refresh) if refresh else None
+    account.token_expires_at, account.scopes = expires_at, scopes
+    account.connected_at = utcnow()
+    db.add(account)
+    return account
+
+
+def connect_meta(db: Session, code: str, state: str) -> list[PlatformAccount]:
+    """One Meta login connects the Facebook Page and its linked Instagram account."""
+    conn = meta.connect(code, state)
+    scopes = ",".join(meta.SCOPES)
+    accounts = [_save_account(db, Platform.FACEBOOK, external_id=conn.page_id,
+                              name=conn.page_name, avatar_url=conn.page_picture,
+                              access=conn.page_token, refresh=None, expires_at=None,
+                              scopes=scopes)]
+    if conn.instagram_id:
+        accounts.append(_save_account(
+            db, Platform.INSTAGRAM, external_id=conn.instagram_id,
+            name=f"@{conn.instagram_username}" if conn.instagram_username else "Instagram",
+            avatar_url=conn.instagram_picture, access=conn.page_token, refresh=None,
+            expires_at=None, scopes=scopes))
+    db.commit()
+    logger.info("Connected Facebook Page %s%s", conn.page_name,
+                f" and Instagram @{conn.instagram_username}" if conn.instagram_id else "")
+    return accounts
+
+
+def connect_tiktok(db: Session, code: str, state: str) -> PlatformAccount:
+    tokens = tiktok.exchange_code(code, state)
+    profile = tiktok.get_profile(tokens.access_token)
+    account = _save_account(db, Platform.TIKTOK, external_id=profile.open_id or tokens.open_id,
+                            name=profile.display_name, avatar_url=profile.avatar_url,
+                            access=tokens.access_token, refresh=tokens.refresh_token,
+                            expires_at=tokens.expires_at, scopes=tokens.scopes)
+    db.commit()
+    return account
+
+
 def disconnect(db: Session, platform: Platform) -> None:
     account = get_account(db, platform)
     if account is None:
@@ -66,17 +117,17 @@ def disconnect(db: Session, platform: Platform) -> None:
         Publication.status.in_([PublicationStatus.QUEUED, PublicationStatus.UPLOADING])))
     if busy is not None:
         raise ConflictError("Uploads to this account are still running. Wait for them first.")
-    if platform is Platform.YOUTUBE:
+    if platform in (Platform.YOUTUBE, Platform.TIKTOK):
         try:
             token = secrets.decrypt(account.refresh_token_enc or account.access_token_enc)
-            youtube.revoke(token)
+            (youtube.revoke if platform is Platform.YOUTUBE else tiktok.revoke)(token)
         except AppError:
             pass  # can't read the token: just forget the account
     db.delete(account)
     db.commit()
 
 
-def _store_tokens(account: PlatformAccount, tokens: youtube.Tokens) -> None:
+def _store_tokens(account: PlatformAccount, tokens) -> None:
     account.access_token_enc = secrets.encrypt(tokens.access_token)
     if tokens.refresh_token:
         account.refresh_token_enc = secrets.encrypt(tokens.refresh_token)
@@ -85,15 +136,23 @@ def _store_tokens(account: PlatformAccount, tokens: youtube.Tokens) -> None:
 
 
 def access_token(db: Session, account: PlatformAccount, *, force_refresh: bool = False) -> str:
-    """A valid access token, refreshed (and saved) when it is about to expire."""
+    """A valid access token, refreshed (and saved) when it is about to expire.
+
+    Meta Page tokens never expire (token_expires_at is None).
+    """
     expires = account.token_expires_at
-    fresh = expires is not None and expires - timedelta(seconds=120) > datetime.now(UTC)
+    never_expires = expires is None and account.platform in (Platform.FACEBOOK,
+                                                              Platform.INSTAGRAM)
+    fresh = never_expires or (expires is not None
+                              and expires - timedelta(seconds=120) > datetime.now(UTC))
     if fresh and not force_refresh:
         return secrets.decrypt(account.access_token_enc)
+    name = account.platform.value.capitalize()
     if not account.refresh_token_enc:
-        raise ConflictError("YouTube access expired. Reconnect YouTube in Settings.",
+        raise ConflictError(f"{name} access expired. Reconnect it in Settings.",
                             code="account_reconnect_required")
-    tokens = youtube.refresh(secrets.decrypt(account.refresh_token_enc))
+    refresher = tiktok.refresh if account.platform is Platform.TIKTOK else youtube.refresh
+    tokens = refresher(secrets.decrypt(account.refresh_token_enc))
     _store_tokens(account, tokens)
     db.commit()
     return tokens.access_token
@@ -123,8 +182,7 @@ def create_publications(
     accounts: dict[Platform, PlatformAccount] = {}
     for platform in dict.fromkeys(platforms):
         if platform not in SUPPORTED:
-            raise InvalidInputError(f"Publishing to {platform.value} isn't available yet. "
-                                    f"{COMING_SOON.get(platform, '')}".strip())
+            raise InvalidInputError(f"Publishing to {platform.value} isn't available.")
         account = get_account(db, platform)
         if account is None:
             raise InvalidInputError(f"Connect your {platform.value} account in Settings first.",
@@ -221,15 +279,14 @@ def run_publication(db: Session, publication_id: uuid.UUID) -> PublicationStatus
                               tags_for(publication.platform, clip.hashtags))
         progress = _ProgressSaver(db, publication)
         try:
-            remote_id, url = youtube.upload_video(access_token(db, account), video, content,
-                                                  privacy=publication.privacy,
-                                                  on_progress=progress)
-        except youtube.YouTubeError as exc:
-            if exc.code != "youtube_unauthorized":
+            remote_id, url = _upload(account, access_token(db, account), video, content,
+                                     publication.privacy, progress)
+        except AppError as exc:
+            if exc.code != "unauthorized" or account.platform in (Platform.FACEBOOK,
+                                                                  Platform.INSTAGRAM):
                 raise
-            remote_id, url = youtube.upload_video(
-                access_token(db, account, force_refresh=True), video, content,
-                privacy=publication.privacy, on_progress=progress)
+            remote_id, url = _upload(account, access_token(db, account, force_refresh=True),
+                                     video, content, publication.privacy, progress)
     except AppError as exc:
         return _fail(db, publication, exc.message)
     except Exception:
@@ -243,6 +300,21 @@ def run_publication(db: Session, publication_id: uuid.UUID) -> PublicationStatus
     db.commit()
     logger.info("Published clip %s to %s: %s", publication.clip_id, publication.platform, url)
     return publication.status
+
+
+def _upload(account: PlatformAccount, token: str, video, content: PostContent,
+            privacy: str, progress) -> tuple[str, str | None]:
+    """Send one video to the account's platform. Returns (remote id, public URL)."""
+    if account.platform is Platform.YOUTUBE:
+        return youtube.upload_video(token, video, content, privacy=privacy,
+                                    on_progress=progress)
+    if account.platform is Platform.FACEBOOK:
+        return meta.upload_facebook_reel(account.external_id, token, video, content,
+                                         privacy=privacy, on_progress=progress)
+    if account.platform is Platform.INSTAGRAM:
+        return meta.upload_instagram_reel(account.external_id, token, video, content,
+                                          on_progress=progress)
+    return tiktok.upload_video(token, video, content, privacy=privacy, on_progress=progress)
 
 
 def _fail(db: Session, publication: Publication, message: str) -> PublicationStatus:
