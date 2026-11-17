@@ -15,6 +15,21 @@ function Badge({ publication, onChanged }) {
     }
   }
 
+  if (publication.status === 'published' && publication.privacy === 'draft') {
+    return (
+      <span className="rounded-md bg-amber-950 px-2 py-0.5 text-xs text-amber-300 ring-1 ring-amber-800"
+        title="TikTok sent it to your inbox: open the TikTok app, tap the notification, paste the caption (Copy caption) and post.">
+        📥 {label}: in your TikTok inbox, finish posting in the app
+      </span>
+    )
+  }
+  if (publication.status === 'published' && !publication.url) {
+    return (
+      <span className="rounded-md bg-emerald-950 px-2 py-0.5 text-xs text-emerald-300 ring-1 ring-emerald-800">
+        ✓ {label} ({publication.privacy})
+      </span>
+    )
+  }
   if (publication.status === 'published') {
     return (
       <a href={publication.url} target="_blank" rel="noreferrer"

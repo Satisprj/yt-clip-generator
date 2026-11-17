@@ -24,6 +24,8 @@ class FakePlatforms:
         self.ig_status_sequence = ["IN_PROGRESS", "FINISHED"]
         self.tiktok_privacy_options = ["SELF_ONLY"]
         self.tiktok_init_error: str | None = None
+        self.tiktok_inbox_error: str | None = None
+        self.tiktok_mode = "direct"
         self.tiktok_tokens = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -76,7 +78,7 @@ class FakePlatforms:
                 return httpx.Response(200, json={
                     "access_token": f"tt-access-{self.tiktok_tokens}", "expires_in": 86400,
                     "refresh_token": "tt-refresh", "open_id": "OPEN1",
-                    "scope": "user.info.basic,video.publish", "token_type": "Bearer"})
+                    "scope": "user.info.basic,video.publish,video.upload", "token_type": "Bearer"})
             if path == "/v2/oauth/revoke/":
                 return httpx.Response(200, json={})
             if path == "/v2/user/info/":
@@ -90,16 +92,29 @@ class FakePlatforms:
             if path == "/v2/post/publish/video/init/":
                 body = json.loads(request.content)
                 self.tiktok_init_body = body
-                # Like the real API: unaudited apps are only refused for non-private posts.
-                if self.tiktok_init_error and (
-                        not self.tiktok_init_error.startswith("unaudited")
-                        or body["post_info"]["privacy_level"] != "SELF_ONLY"):
+                # Like the real API: an unaudited app can't direct-post to a public account,
+                # whatever privacy level the post asks for.
+                if self.tiktok_init_error:
                     return httpx.Response(403, json={"error": {"code": self.tiktok_init_error,
                                                                "message": "denied"}})
+                self.tiktok_mode = "direct"
                 return httpx.Response(200, json={"data": {
                     "publish_id": "PUB1", "upload_url": "https://open-upload.tiktokapis.com/up/1"},
                     "error": {"code": "ok"}})
+            if path == "/v2/post/publish/inbox/video/init/":
+                if self.tiktok_inbox_error:
+                    return httpx.Response(401, json={"error": {"code": self.tiktok_inbox_error,
+                                                               "message": "no scope"}})
+                self.tiktok_inbox_body = json.loads(request.content)
+                self.tiktok_mode = "inbox"
+                return httpx.Response(200, json={"data": {
+                    "publish_id": "INBOX1",
+                    "upload_url": "https://open-upload.tiktokapis.com/up/2"},
+                    "error": {"code": "ok"}})
             if path == "/v2/post/publish/status/fetch/":
+                if self.tiktok_mode == "inbox":
+                    return httpx.Response(200, json={"data": {"status": "SEND_TO_USER_INBOX"},
+                                                     "error": {"code": "ok"}})
                 return httpx.Response(200, json={"data": {
                     "status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [7123]},
                     "error": {"code": "ok"}})
@@ -217,7 +232,7 @@ def test_instagram_processing_error_is_reported(client, db, platforms, queued):
 def test_tiktok_connect_and_private_post(client, db, platforms, queued):
     auth_url, location = _connect(client, "tiktok", "/api/integrations/tiktok/callback")
     query = parse_qs(urlparse(auth_url).query)
-    assert query["client_key"] == ["tt-key"] and "video.publish" in query["scope"][0]
+    assert query["client_key"] == ["tt-key"] and "video.upload" in query["scope"][0]
     assert "connected=Tik+Creator" in location
     account = db.query(PlatformAccount).filter_by(platform=Platform.TIKTOK).one()
     assert secrets.decrypt(account.refresh_token_enc) == "tt-refresh"
@@ -246,8 +261,8 @@ def test_tiktok_public_when_audited(client, db, platforms, queued):
     assert platforms.tiktok_init_body["post_info"]["privacy_level"] == "PUBLIC_TO_EVERYONE"
 
 
-def test_tiktok_unaudited_public_post_falls_back_to_private(client, db, platforms, queued):
-    # Seen with a real sandbox app: TikTok lists public options, then rejects public posts.
+def test_tiktok_unaudited_app_sends_to_inbox(client, db, platforms, queued):
+    # Seen with a real sandbox app and a public TikTok account: direct posts are refused.
     platforms.tiktok_privacy_options = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS",
                                         "SELF_ONLY"]
     platforms.tiktok_init_error = "unaudited_client_can_only_post_to_private_accounts"
@@ -256,9 +271,24 @@ def test_tiktok_unaudited_public_post_falls_back_to_private(client, db, platform
     pid = uuid.UUID(client.post(f"/api/clips/{clip.id}/publish", json={
         "platforms": ["tiktok"], "privacy": "public"}).json()["queued"][0]["id"])
     assert service.run_publication(db, pid) == PS.PUBLISHED
-    levels = [json.loads(r.content)["post_info"]["privacy_level"] for r in platforms.requests
-              if r.url.path == "/v2/post/publish/video/init/"]
-    assert levels == ["PUBLIC_TO_EVERYONE", "SELF_ONLY"]
+    db.expire_all()
+    publication = db.get(Publication, pid)
+    assert (publication.privacy, publication.remote_id, publication.url) == (
+        "draft", "INBOX1", None)
+    assert platforms.tiktok_inbox_body["source_info"]["source"] == "FILE_UPLOAD"
+    assert platforms.uploaded["tiktok"] == _clip_bytes(clip)
+
+
+def test_tiktok_inbox_without_upload_scope_asks_to_reconnect(client, db, platforms, queued):
+    platforms.tiktok_init_error = "unaudited_client_can_only_post_to_private_accounts"
+    platforms.tiktok_inbox_error = "scope_not_authorized"
+    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+    clip = _ready_clip(db)
+    pid = uuid.UUID(client.post(f"/api/clips/{clip.id}/publish", json={
+        "platforms": ["tiktok"]}).json()["queued"][0]["id"])
+    assert service.run_publication(db, pid) == PS.FAILED
+    db.expire_all()
+    assert "Reconnect TikTok" in db.get(Publication, pid).error_message
 
 
 def test_tiktok_other_init_errors_are_reported(client, db, platforms, queued):

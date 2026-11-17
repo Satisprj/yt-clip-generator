@@ -4,7 +4,9 @@ Flow (TikTok docs, "Content Posting API - Direct Post"):
 creator_info/query -> video/init (FILE_UPLOAD, chunk plan) -> PUT chunks to upload_url
 -> poll status/fetch until PUBLISH_COMPLETE.
 
-Unaudited apps can only post privately ("only me"); public posting needs TikTok's audit.
+Unaudited apps can only direct-post to *private* TikTok accounts. For a public account the
+video is sent to the creator's TikTok inbox instead ("Upload" API, video.upload scope): the
+creator gets a notification and posts it from the TikTok app, publicly if they like.
 """
 
 import json
@@ -28,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 API = "https://open.tiktokapis.com"
-SCOPES = ["user.info.basic", "video.publish"]
+SCOPES = ["user.info.basic", "video.publish", "video.upload"]
 CHUNK = 10 * 1024 * 1024      # 10 MB chunks (TikTok allows 5-64 MB; last may be larger)
 SINGLE_CHUNK_MAX = 64 * 1024 * 1024
 POLL_INTERVAL = 5
@@ -89,6 +91,9 @@ def _api_error(response: httpx.Response) -> tuple[str, str]:
 
 def _check(response: httpx.Response, action: str) -> dict:
     code, message = _api_error(response)
+    if code == "scope_not_authorized":
+        raise TikTokError("TikTok didn't grant the upload permission. Reconnect TikTok in "
+                          "Settings and allow every permission.", code="scope")
     if response.status_code == 401 or code in ("access_token_invalid", "invalid_token"):
         raise TikTokError("Unauthorized", code="unauthorized")
     if code == "unaudited_client_can_only_post_to_private_accounts":
@@ -183,52 +188,60 @@ def _privacy_level(privacy: str, options: list[str]) -> str:
 
 def upload_video(access_token: str, video: Path, content: PostContent, *, privacy: str,
                  on_progress: Callable[[float], None] | None = None,
-                 sleep: Callable[[float], None] = time.sleep) -> tuple[str, str | None]:
-    """Direct-post a video. Returns (publish id or post id, URL if TikTok reports one)."""
+                 sleep: Callable[[float], None] = time.sleep) -> tuple[str, str | None, bool]:
+    """Post a video. Returns (post or publish id, URL if known, sent_to_drafts).
+
+    Tries a direct post first. Unaudited apps may only direct-post to private accounts, so for
+    a public account the video goes to the creator's TikTok inbox (drafts) instead.
+    """
     auth = {"Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json; charset=UTF-8"}
     size = video.stat().st_size
     chunk_size, chunks = chunk_plan(size)
+    source = {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk_size,
+              "total_chunk_count": chunks}
 
     with http.client(timeout=300) as c:
-        creator = _check(c.post(f"{API}/v2/post/publish/creator_info/query/", headers=auth,
-                                content=b"{}"), "checking your TikTok account")["data"]
-        level = _privacy_level(privacy, creator.get("privacy_level_options") or [])
-
-        def start(privacy_level: str) -> dict:
+        def direct(privacy_level: str) -> dict:
             return _check(c.post(f"{API}/v2/post/publish/video/init/", headers=auth,
                                  content=json.dumps({
                                      "post_info": {"title": content.caption,
                                                    "privacy_level": privacy_level,
                                                    "disable_duet": False, "disable_comment": False,
                                                    "disable_stitch": False},
-                                     "source_info": {"source": "FILE_UPLOAD", "video_size": size,
-                                                     "chunk_size": chunk_size,
-                                                     "total_chunk_count": chunks},
+                                     "source_info": source,
                                  }).encode()), "starting the TikTok upload")["data"]
 
+        creator = _check(c.post(f"{API}/v2/post/publish/creator_info/query/", headers=auth,
+                                content=b"{}"), "checking your TikTok account")["data"]
+        level = _privacy_level(privacy, creator.get("privacy_level_options") or [])
+        drafted = False
         try:
-            init = start(level)
+            init = direct(level)
         except TikTokError as exc:
-            # Unaudited apps still list public options, then reject them: post privately instead.
-            if exc.code != "unaudited" or level == "SELF_ONLY":
+            if exc.code != "unaudited":
                 raise
-            init = start("SELF_ONLY")
+            logger.info("TikTok refused a direct post (unaudited app, public account); "
+                        "sending the video to the creator's inbox instead")
+            init = _check(c.post(f"{API}/v2/post/publish/inbox/video/init/", headers=auth,
+                                 content=json.dumps({"source_info": source}).encode()),
+                          "sending the video to your TikTok inbox")["data"]
+            drafted = True
         publish_id, upload_url = init["publish_id"], init["upload_url"]
 
         with video.open("rb") as fh:
             for index in range(chunks):
-                start = index * chunk_size
-                end = size - 1 if index == chunks - 1 else start + chunk_size - 1
-                fh.seek(start)
-                body = fh.read(end - start + 1)
+                first = index * chunk_size
+                last = size - 1 if index == chunks - 1 else first + chunk_size - 1
+                fh.seek(first)
+                body = fh.read(last - first + 1)
                 response = c.put(upload_url, content=body, headers={
                     "Content-Type": "video/mp4", "Content-Length": str(len(body)),
-                    "Content-Range": f"bytes {start}-{end}/{size}"})
+                    "Content-Range": f"bytes {first}-{last}/{size}"})
                 if response.status_code not in (200, 201, 206):
                     raise TikTokError(f"TikTok upload failed (HTTP {response.status_code}).")
                 if on_progress:
-                    on_progress(0.8 * (end + 1) / size)
+                    on_progress(0.8 * (last + 1) / size)
 
         waited = 0.0
         while True:
@@ -236,13 +249,17 @@ def upload_video(access_token: str, video: Path, content: PostContent, *, privac
                                    content=json.dumps({"publish_id": publish_id}).encode()),
                             "checking the TikTok post")["data"]
             state = status.get("status")
+            if state == "SEND_TO_USER_INBOX" or (drafted and state == "PUBLISH_COMPLETE"):
+                if on_progress:
+                    on_progress(1.0)
+                return publish_id, None, True
             if state == "PUBLISH_COMPLETE":
                 post_ids = status.get("publicaly_available_post_id") or []
                 if on_progress:
                     on_progress(1.0)
                 post_id = str(post_ids[0]) if post_ids else publish_id
                 url = f"https://www.tiktok.com/video/{post_ids[0]}" if post_ids else None
-                return post_id, url
+                return post_id, url, False
             if state == "FAILED":
                 raise TikTokError(f"TikTok rejected the video: {status.get('fail_reason')}")
             if waited >= POLL_TIMEOUT:

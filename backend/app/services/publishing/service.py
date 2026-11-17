@@ -32,8 +32,9 @@ REQUIREMENTS = {
                         "and a Meta developer app. Connect via Facebook (one login for both).",
     Platform.FACEBOOK: "Needs a Facebook Page (apps can't post to personal profiles) and a Meta "
                        "developer app. 'Private' saves the Reel as a draft on the Page.",
-    Platform.TIKTOK: "Needs a TikTok developer app. Posts are private ('only me') until TikTok "
-                     "audits the app.",
+    Platform.TIKTOK: "Needs a TikTok developer app. Until TikTok audits it, clips go to your "
+                     "TikTok inbox and you finish the post in the TikTok app (or set your "
+                     "TikTok account to private for direct 'only me' posts).",
 }
 # Facebook and Instagram are connected together with one Meta login.
 CONNECT_GROUP = {Platform.FACEBOOK: "meta", Platform.INSTAGRAM: "meta",
@@ -295,6 +296,9 @@ def run_publication(db: Session, publication_id: uuid.UUID) -> PublicationStatus
 
     publication.status = PublicationStatus.PUBLISHED
     publication.progress = 100
+    if progress.drafted:
+        # Sent to the creator's TikTok inbox; they finish the post in the TikTok app.
+        publication.privacy = "draft"
     publication.remote_id, publication.url = remote_id, url
     publication.published_at = utcnow()
     db.commit()
@@ -314,7 +318,11 @@ def _upload(account: PlatformAccount, token: str, video, content: PostContent,
     if account.platform is Platform.INSTAGRAM:
         return meta.upload_instagram_reel(account.external_id, token, video, content,
                                           on_progress=progress)
-    return tiktok.upload_video(token, video, content, privacy=privacy, on_progress=progress)
+    post_id, url, drafted = tiktok.upload_video(token, video, content, privacy=privacy,
+                                                on_progress=progress)
+    if drafted:
+        progress.drafted = True
+    return post_id, url
 
 
 def _fail(db: Session, publication: Publication, message: str) -> PublicationStatus:
@@ -332,6 +340,7 @@ class _ProgressSaver:
 
     def __init__(self, db: Session, publication: Publication) -> None:
         self.db, self.publication, self.last = db, publication, 0.0
+        self.drafted = False  # set when TikTok received the video as a draft
 
     def __call__(self, fraction: float) -> None:
         now = time.monotonic()
