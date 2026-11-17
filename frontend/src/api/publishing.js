@@ -37,3 +37,8 @@ export const PLATFORM_LABELS = {
   facebook: 'Facebook Reels',
   tiktok: 'TikTok',
 }
+
+/** After posting a TikTok inbox draft in the app, look up the post's link. */
+export function findPublicationLink(publicationId) {
+  return apiRequest(`/publications/${encodeURIComponent(publicationId)}/find-link`, { method: 'POST' })
+}

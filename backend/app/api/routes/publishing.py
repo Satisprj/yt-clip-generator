@@ -180,6 +180,11 @@ def retry_publication(publication_id: uuid.UUID, db: DbSession) -> PublicationRe
     return PublicationRead.model_validate(service.retry_publication(db, publication_id))
 
 
+@router.post("/publications/{publication_id}/find-link", response_model=PublicationRead)
+def find_publication_link(publication_id: uuid.UUID, db: DbSession) -> PublicationRead:
+    return PublicationRead.model_validate(service.find_tiktok_link(db, publication_id))
+
+
 @router.get("/publications", response_model=list[PublicationRead])
 def recent_publications(
     db: DbSession, limit: Annotated[int, Query(ge=1, le=200)] = 50,

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 API = "https://open.tiktokapis.com"
-SCOPES = ["user.info.basic", "video.publish", "video.upload"]
+SCOPES = ["user.info.basic", "video.publish", "video.upload", "video.list"]
 CHUNK = 10 * 1024 * 1024      # 10 MB chunks (TikTok allows 5-64 MB; last may be larger)
 SINGLE_CHUNK_MAX = 64 * 1024 * 1024
 POLL_INTERVAL = 5
@@ -92,8 +92,10 @@ def _api_error(response: httpx.Response) -> tuple[str, str]:
 def _check(response: httpx.Response, action: str) -> dict:
     code, message = _api_error(response)
     if code == "scope_not_authorized":
-        raise TikTokError("TikTok didn't grant the upload permission. Reconnect TikTok in "
-                          "Settings and allow every permission.", code="scope")
+        raise TikTokError(f"TikTok didn't grant the permission needed for {action}. In the "
+                          "TikTok developer portal (Sandbox → Scopes), add video.upload and "
+                          "video.list and click 'Apply changes'; then Disconnect and Connect "
+                          "TikTok in Settings.", code="scope")
     if response.status_code == 401 or code in ("access_token_invalid", "invalid_token"):
         raise TikTokError("Unauthorized", code="unauthorized")
     if code == "unaudited_client_can_only_post_to_private_accounts":
@@ -267,3 +269,45 @@ def upload_video(access_token: str, video: Path, content: PostContent, *, privac
                                   "Check the TikTok app.")
             sleep(POLL_INTERVAL)
             waited += POLL_INTERVAL
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def find_posted_video(access_token: str, publish_id: str, *, after: datetime,
+                      hints: list[str], exclude: set[str]) -> tuple[str, str] | None:
+    """Find the post a creator made from an inbox draft. Returns (video id, share URL).
+
+    TikTok doesn't link a draft to the post the creator makes from it, so: ask the status
+    endpoint first, then look through the creator's recent videos (video.list scope) for one
+    posted after the draft was sent, preferring one whose caption starts like ours.
+    """
+    auth = {"Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8"}
+    with http.client() as c:
+        status = _check(c.post(f"{API}/v2/post/publish/status/fetch/", headers=auth,
+                               content=json.dumps({"publish_id": publish_id}).encode()),
+                        "checking the TikTok post")["data"]
+        post_ids = [str(i) for i in status.get("publicaly_available_post_id") or []]
+        if post_ids:  # TikTok linked the draft to its post: no need to search
+            return post_ids[0], f"https://www.tiktok.com/video/{post_ids[0]}"
+        response = c.post(f"{API}/v2/video/list/",
+                          params={"fields": "id,share_url,create_time,title,video_description"},
+                          headers=auth, content=json.dumps({"max_count": 20}).encode())
+    videos = _check(response, "reading your TikTok videos").get("data", {}).get("videos") or []
+
+    since = after.timestamp() - 120
+    fresh = sorted((v for v in videos if (v.get("create_time") or 0) >= since
+                    and str(v.get("id")) not in exclude),
+                   key=lambda v: v.get("create_time") or 0)
+    if not fresh:
+        return None
+    wanted = [w for w in (_normalize(h)[:30] for h in hints) if w]
+
+    def text(v: dict) -> str:
+        return _normalize(f"{v.get('title') or ''} {v.get('video_description') or ''}")
+
+    match = next((v for v in fresh if any(w in text(v) for w in wanted)), None)
+    video = match or fresh[0]
+    return str(video["id"]), video.get("share_url") or f"https://www.tiktok.com/video/{video['id']}"

@@ -26,6 +26,7 @@ class FakePlatforms:
         self.tiktok_init_error: str | None = None
         self.tiktok_inbox_error: str | None = None
         self.tiktok_mode = "direct"
+        self.tiktok_videos: list[dict] = []
         self.tiktok_tokens = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -111,6 +112,10 @@ class FakePlatforms:
                     "publish_id": "INBOX1",
                     "upload_url": "https://open-upload.tiktokapis.com/up/2"},
                     "error": {"code": "ok"}})
+            if path == "/v2/video/list/":
+                return httpx.Response(200, json={"data": {"videos": self.tiktok_videos,
+                                                          "has_more": False},
+                                                 "error": {"code": "ok"}})
             if path == "/v2/post/publish/status/fetch/":
                 if self.tiktok_mode == "inbox":
                     return httpx.Response(200, json={"data": {"status": "SEND_TO_USER_INBOX"},
@@ -279,6 +284,44 @@ def test_tiktok_unaudited_app_sends_to_inbox(client, db, platforms, queued):
     assert platforms.uploaded["tiktok"] == _clip_bytes(clip)
 
 
+def _inbox_draft(client, db, platforms):
+    platforms.tiktok_init_error = "unaudited_client_can_only_post_to_private_accounts"
+    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+    clip = _ready_clip(db)
+    pid = client.post(f"/api/clips/{clip.id}/publish", json={
+        "platforms": ["tiktok"], "caption": "My clip caption\n\nmore"}).json()["queued"][0]["id"]
+    assert service.run_publication(db, uuid.UUID(pid)) == PS.PUBLISHED
+    return pid
+
+
+def test_tiktok_draft_link_is_found_after_posting(client, db, platforms, queued):
+    pid = _inbox_draft(client, db, platforms)
+    response = client.post(f"/api/publications/{pid}/find-link")
+    assert response.status_code == 409 and "Post it from your TikTok inbox" in response.text
+
+    now = int(datetime.now(UTC).timestamp())
+    title = db.get(Publication, uuid.UUID(pid)).caption.splitlines()[0]
+    platforms.tiktok_videos = [
+        {"id": "111", "share_url": "https://www.tiktok.com/@me/video/111",
+         "create_time": now - 86400, "title": "My clip caption (old)"},
+        {"id": "222", "share_url": "https://www.tiktok.com/@me/video/222",
+         "create_time": now + 5, "title": "something else"},
+        {"id": "333", "share_url": "https://www.tiktok.com/@me/video/333",
+         "create_time": now + 30, "title": f"{title} #fun"},
+    ]
+    body = client.post(f"/api/publications/{pid}/find-link").json()
+    assert (body["url"], body["privacy"]) == ("https://www.tiktok.com/@me/video/333", "posted")
+
+
+def test_tiktok_link_lookup_only_for_drafts(client, db, platforms, queued):
+    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+    clip = _ready_clip(db)
+    pid = client.post(f"/api/clips/{clip.id}/publish", json={
+        "platforms": ["tiktok"]}).json()["queued"][0]["id"]
+    service.run_publication(db, uuid.UUID(pid))
+    assert client.post(f"/api/publications/{pid}/find-link").status_code == 409
+
+
 def test_tiktok_inbox_without_upload_scope_asks_to_reconnect(client, db, platforms, queued):
     platforms.tiktok_init_error = "unaudited_client_can_only_post_to_private_accounts"
     platforms.tiktok_inbox_error = "scope_not_authorized"
@@ -288,7 +331,7 @@ def test_tiktok_inbox_without_upload_scope_asks_to_reconnect(client, db, platfor
         "platforms": ["tiktok"]}).json()["queued"][0]["id"])
     assert service.run_publication(db, pid) == PS.FAILED
     db.expire_all()
-    assert "Reconnect TikTok" in db.get(Publication, pid).error_message
+    assert "Connect TikTok in Settings" in db.get(Publication, pid).error_message
 
 
 def test_tiktok_other_init_errors_are_reported(client, db, platforms, queued):

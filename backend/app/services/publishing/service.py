@@ -246,6 +246,32 @@ def retry_publication(db: Session, publication_id: uuid.UUID) -> Publication:
     return publication
 
 
+def find_tiktok_link(db: Session, publication_id: uuid.UUID) -> Publication:
+    """After the creator posts a TikTok inbox draft in the app, look up the post's link."""
+    publication = db.get(Publication, publication_id)
+    if publication is None:
+        raise NotFoundError("Publication not found.")
+    if publication.platform is not Platform.TIKTOK or publication.privacy != "draft":
+        raise ConflictError("Only TikTok uploads waiting in your inbox need a link lookup.")
+    account = db.get(PlatformAccount, publication.account_id) if publication.account_id else None
+    if account is None:
+        raise ConflictError("The TikTok account was disconnected. Connect it again first.")
+    linked = set(db.scalars(select(Publication.remote_id).where(
+        Publication.platform == Platform.TIKTOK, Publication.id != publication.id,
+        Publication.privacy != "draft", Publication.remote_id.is_not(None))))
+    hints = [h for h in (publication.title, publication.caption.split("\n", 1)[0]) if h]
+    found = tiktok.find_posted_video(access_token(db, account), publication.remote_id,
+                                     after=publication.published_at or publication.created_at,
+                                     hints=hints, exclude=linked)
+    if found is None:
+        raise ConflictError("TikTok doesn't show this video on your profile yet. Post it from "
+                            "your TikTok inbox first, wait a minute, then try again.")
+    publication.remote_id, publication.url = found
+    publication.privacy = "posted"
+    db.commit()
+    return publication
+
+
 def _enqueue(db: Session, publication: Publication) -> None:
     from app.worker.tasks import publish_clip
 

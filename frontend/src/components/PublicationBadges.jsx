@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { PLATFORM_LABELS, retryPublication } from '../api/publishing.js'
+import { PLATFORM_LABELS, findPublicationLink, retryPublication } from '../api/publishing.js'
 
 function Badge({ publication, onChanged }) {
   const [busy, setBusy] = useState(false)
+  const [linkError, setLinkError] = useState(null)
   const label = PLATFORM_LABELS[publication.platform]
 
   async function retry() {
@@ -15,11 +16,28 @@ function Badge({ publication, onChanged }) {
     }
   }
 
+  async function findLink() {
+    setBusy(true)
+    setLinkError(null)
+    try {
+      await findPublicationLink(publication.id)
+      onChanged()
+    } catch (err) {
+      setLinkError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (publication.status === 'published' && publication.privacy === 'draft') {
     return (
-      <span className="rounded-md bg-amber-950 px-2 py-0.5 text-xs text-amber-300 ring-1 ring-amber-800"
-        title="TikTok sent it to your inbox: open the TikTok app, tap the notification, paste the caption (Copy caption) and post.">
+      <span className="inline-flex flex-wrap items-center gap-1 rounded-md bg-amber-950 px-2 py-0.5 text-xs text-amber-300 ring-1 ring-amber-800"
+        title="TikTok sent it to your inbox: open the TikTok app, tap the notification, paste the caption (Copy caption) and post. Then click 'Get link'.">
         📥 {label}: in your TikTok inbox, finish posting in the app
+        <button onClick={findLink} disabled={busy} className="ml-1 underline disabled:opacity-50">
+          {busy ? 'checking…' : '🔗 Get link'}
+        </button>
+        {linkError && <span className="w-full text-rose-300">{linkError}</span>}
       </span>
     )
   }
