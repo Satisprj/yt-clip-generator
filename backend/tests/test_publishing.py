@@ -156,7 +156,7 @@ def test_secrets_roundtrip_and_ttl(storage_dir):
 
 
 def test_not_configured_gives_clear_error(client, storage_dir, monkeypatch):
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
     response = client.get("/api/integrations/youtube/connect")
     assert response.status_code == 400
     assert "GOOGLE_CLIENT_ID" in response.json()["error"]["message"]

@@ -40,6 +40,23 @@ New-Item -ItemType Directory -Force (Split-Path $workerLog) | Out-Null
 Start-DevWindow 'clipgen worker' $backend "& '$python' -m celery -A app.worker.celery_app worker --pool=solo --loglevel=INFO 2>&1 | Tee-Object -FilePath '$workerLog'"
 Start-DevWindow 'clipgen frontend' $frontend "& '$npm' run dev"
 
+# TikTok (and other platforms) only accept https callback addresses. If a *_REDIRECT_URI in
+# .env points at an https host, open an ngrok tunnel from that host to the API.
+$envFile = Join-Path $backend '.env'
+$tunnelHost = $null
+if (Test-Path $envFile) {
+    $match = Select-String -Path $envFile -Pattern '^\s*\w+_REDIRECT_URI\s*=\s*https://([^/\s]+)' | Select-Object -First 1
+    if ($match) { $tunnelHost = $match.Matches[0].Groups[1].Value }
+}
+if ($tunnelHost) {
+    if (Get-Command ngrok -ErrorAction SilentlyContinue) {
+        Start-DevWindow 'clipgen tunnel' $root "ngrok http 8000 --url=https://$tunnelHost"
+        Write-Host "  Tunnel:   https://$tunnelHost -> API" -ForegroundColor Cyan
+    } else {
+        Write-Warning "A redirect URI uses https://$tunnelHost but ngrok isn't installed; that platform's Connect won't work."
+    }
+}
+
 Write-Host ''
 Write-Host 'Started 3 windows:' -ForegroundColor Cyan
 Write-Host '  App:      http://localhost:5173'

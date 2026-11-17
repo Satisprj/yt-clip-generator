@@ -10,6 +10,10 @@ os.environ["RENDER_HEIGHT"] = "384"
 os.environ["RENDER_PRESET"] = "ultrafast"
 # Most pipeline tests use the full-download path; smart mode has its own tests.
 os.environ["DOWNLOAD_MODE"] = "full"
+# Never use the developer's real platform keys from .env (tests that need keys set fake ones).
+for _key in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "META_APP_ID", "META_APP_SECRET",
+             "META_PAGE_ID", "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"):
+    os.environ[_key] = ""
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+pg8000://clipgen:clipgen@localhost:5432/clipgen_test"
 )

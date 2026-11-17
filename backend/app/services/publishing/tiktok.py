@@ -93,7 +93,7 @@ def _check(response: httpx.Response, action: str) -> dict:
         raise TikTokError("Unauthorized", code="unauthorized")
     if code == "unaudited_client_can_only_post_to_private_accounts":
         raise TikTokError("TikTok only allows private posts until your app passes TikTok's "
-                          "audit. Publish with visibility 'Private'.")
+                          "audit. Publish with visibility 'Private'.", code="unaudited")
     if code == "spam_risk_too_many_posts":
         raise TikTokError("TikTok's daily posting limit for this account was reached.")
     if response.status_code >= 400 or code not in ("ok", "error") and code:
@@ -194,15 +194,26 @@ def upload_video(access_token: str, video: Path, content: PostContent, *, privac
         creator = _check(c.post(f"{API}/v2/post/publish/creator_info/query/", headers=auth,
                                 content=b"{}"), "checking your TikTok account")["data"]
         level = _privacy_level(privacy, creator.get("privacy_level_options") or [])
-        init = _check(c.post(f"{API}/v2/post/publish/video/init/", headers=auth,
-                             content=json.dumps({
-                                 "post_info": {"title": content.caption, "privacy_level": level,
-                                               "disable_duet": False, "disable_comment": False,
-                                               "disable_stitch": False},
-                                 "source_info": {"source": "FILE_UPLOAD", "video_size": size,
-                                                 "chunk_size": chunk_size,
-                                                 "total_chunk_count": chunks},
-                             }).encode()), "starting the TikTok upload")["data"]
+
+        def start(privacy_level: str) -> dict:
+            return _check(c.post(f"{API}/v2/post/publish/video/init/", headers=auth,
+                                 content=json.dumps({
+                                     "post_info": {"title": content.caption,
+                                                   "privacy_level": privacy_level,
+                                                   "disable_duet": False, "disable_comment": False,
+                                                   "disable_stitch": False},
+                                     "source_info": {"source": "FILE_UPLOAD", "video_size": size,
+                                                     "chunk_size": chunk_size,
+                                                     "total_chunk_count": chunks},
+                                 }).encode()), "starting the TikTok upload")["data"]
+
+        try:
+            init = start(level)
+        except TikTokError as exc:
+            # Unaudited apps still list public options, then reject them: post privately instead.
+            if exc.code != "unaudited" or level == "SELF_ONLY":
+                raise
+            init = start("SELF_ONLY")
         publish_id, upload_url = init["publish_id"], init["upload_url"]
 
         with video.open("rb") as fh:

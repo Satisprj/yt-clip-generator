@@ -90,7 +90,10 @@ class FakePlatforms:
             if path == "/v2/post/publish/video/init/":
                 body = json.loads(request.content)
                 self.tiktok_init_body = body
-                if self.tiktok_init_error:
+                # Like the real API: unaudited apps are only refused for non-private posts.
+                if self.tiktok_init_error and (
+                        not self.tiktok_init_error.startswith("unaudited")
+                        or body["post_info"]["privacy_level"] != "SELF_ONLY"):
                     return httpx.Response(403, json={"error": {"code": self.tiktok_init_error,
                                                                "message": "denied"}})
                 return httpx.Response(200, json={"data": {
@@ -243,15 +246,30 @@ def test_tiktok_public_when_audited(client, db, platforms, queued):
     assert platforms.tiktok_init_body["post_info"]["privacy_level"] == "PUBLIC_TO_EVERYONE"
 
 
-def test_tiktok_unaudited_error_is_explained(client, db, platforms, queued):
-    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+def test_tiktok_unaudited_public_post_falls_back_to_private(client, db, platforms, queued):
+    # Seen with a real sandbox app: TikTok lists public options, then rejects public posts.
+    platforms.tiktok_privacy_options = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS",
+                                        "SELF_ONLY"]
     platforms.tiktok_init_error = "unaudited_client_can_only_post_to_private_accounts"
+    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+    clip = _ready_clip(db)
+    pid = uuid.UUID(client.post(f"/api/clips/{clip.id}/publish", json={
+        "platforms": ["tiktok"], "privacy": "public"}).json()["queued"][0]["id"])
+    assert service.run_publication(db, pid) == PS.PUBLISHED
+    levels = [json.loads(r.content)["post_info"]["privacy_level"] for r in platforms.requests
+              if r.url.path == "/v2/post/publish/video/init/"]
+    assert levels == ["PUBLIC_TO_EVERYONE", "SELF_ONLY"]
+
+
+def test_tiktok_other_init_errors_are_reported(client, db, platforms, queued):
+    _connect(client, "tiktok", "/api/integrations/tiktok/callback")
+    platforms.tiktok_init_error = "spam_risk_too_many_posts"
     clip = _ready_clip(db)
     pid = uuid.UUID(client.post(f"/api/clips/{clip.id}/publish", json={
         "platforms": ["tiktok"]}).json()["queued"][0]["id"])
     assert service.run_publication(db, pid) == PS.FAILED
     db.expire_all()
-    assert "until your app passes TikTok's audit" in db.get(Publication, pid).error_message
+    assert "daily posting limit" in db.get(Publication, pid).error_message
 
 
 def test_tiktok_expired_token_is_refreshed(client, db, platforms, queued):
@@ -292,7 +310,7 @@ def test_one_click_to_all_connected_platforms(client, db, platforms, queued):
 
 def test_not_configured_platforms_explain_setup(client, storage_dir, monkeypatch):
     for key in ("META_APP_ID", "TIKTOK_CLIENT_KEY"):
-        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, "")
     meta_resp = client.get("/api/integrations/meta/connect")
     assert meta_resp.status_code == 400 and "META_APP_ID" in meta_resp.json()["error"]["message"]
     tt_resp = client.get("/api/integrations/tiktok/connect")
